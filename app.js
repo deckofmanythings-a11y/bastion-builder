@@ -15,6 +15,7 @@ const DEF = Object.fromEntries(FACILITIES.map(f => [f.key, f]));
 // ---------- state ----------
 let state = load();
 let tab = 'facilities';
+const prereqOpen = {}; // bastion id -> whether the prerequisites panel is expanded (UI-only, survives redraws)
 
 function load() {
   try {
@@ -218,7 +219,7 @@ function advanceDays(b, L) {
     }
     if (f.enlarging) {
       f.enlarging.daysLeft -= L;
-      if (f.enlarging.daysLeft <= 0) { f.enlarging = null; f.enlarged = true; syncHirelings(f); addLog(b, `${facName(f)} enlarged to Vast. ${DEF[f.key].enlarge?.note || ''}`, 'build'); }
+      if (f.enlarging.daysLeft <= 0) { f.enlarging = null; f.enlarged = true; f.enlargedTurn = b.turn + 1; syncHirelings(f); addLog(b, `${facName(f)} enlarged to Vast. ${DEF[f.key].enlarge?.note || ''}`, 'build'); }
     }
   }
   for (const x of b.basics) {
@@ -400,7 +401,11 @@ function render() {
   const b = B();
   const app = $('#app');
   if (!b) { app.innerHTML = emptyView(); return; }
-  for (const f of b.specials) { f.options ||= {}; syncHirelings(f); }
+  for (const f of b.specials) {
+    f.options ||= {}; syncHirelings(f);
+    if (f.addedTurn == null) f.addedTurn = b.turn; // backfill saves made before this field existed
+    if (f.enlarged && f.enlargedTurn == null) f.enlargedTurn = b.turn;
+  }
   app.innerHTML = `
     <aside class="side">${sideView(b)}</aside>
     <section class="main">
@@ -439,10 +444,14 @@ function sideView(b) {
       <label class="field"><span>Character</span><input data-bind="character" value="${esc(b.character)}" placeholder="Who owns it?"></label>
       <label class="field"><span>Character level</span><input type="number" min="1" max="20" data-bind="level" data-num value="${b.level}"></label>
       ${b.level < 5 ? '<p class="warn">Bastions are normally gained at level 5.</p>' : ''}
-      <details class="prereqs" ${Object.values(b.prereqs || {}).some(Boolean) ? '' : 'open'}>
-        <summary>Facility prerequisites</summary>
-        ${Object.entries(PREREQS).map(([k, t]) => `<label class="check"><input type="checkbox" data-prereq="${k}" ${b.prereqs?.[k] ? 'checked' : ''}> ${t}</label>`).join('')}
-      </details>
+      ${(() => {
+        const n = Object.values(b.prereqs || {}).filter(Boolean).length;
+        const open = prereqOpen[b.id] ?? n === 0; // user's choice wins; default open until something is ticked
+        return `<details class="prereqs" data-prereq-panel ${open ? 'open' : ''}>
+        <summary>Facility prerequisites <small>${n ? `${n} selected` : 'none selected'}</small></summary>
+        ${Object.entries(PREREQS).map(([k, t]) => `<label class="check prereq-opt ${b.prereqs?.[k] ? 'on' : ''}"><input type="checkbox" data-prereq="${k}" ${b.prereqs?.[k] ? 'checked' : ''}><span>${t}</span></label>`).join('')}
+      </details>`;
+      })()}
     </div>
     <div class="card treasury">
       <div class="label">Treasury</div>
@@ -482,6 +491,20 @@ function facilitiesView(b) {
 
     <div class="section-head"><h2>Basic Facilities</h2></div>
     <p class="hint">No game effects — they're for roleplay and verisimilitude. Your Bastion starts with one free Cramped and one free Roomy basic facility.</p>
+    <details class="card rules" ${b.basics.length <= 2 ? 'open' : ''}>
+      <summary>How building &amp; enlarging rooms works</summary>
+      <div class="ladder">
+        ${['Cramped', 'Roomy', 'Vast'].map((s, i) => `
+          ${i ? `<div class="step"><span>Enlarge</span><b>${gp(BASIC_ENLARGE[['Cramped', 'Roomy'][i - 1]].cost)}</b><span>${BASIC_ENLARGE[['Cramped', 'Roomy'][i - 1]].days} days</span><i>→</i></div>` : ''}
+          <div class="size"><b>${s}</b><span>${SPACES[s].squares} squares</span><small>Build new: ${gp(BASIC_ADD[s].cost)} · ${BASIC_ADD[s].days} days</small></div>`).join('')}
+      </div>
+      <ul class="small">
+        <li><b>Enlarge one size at a time.</b> Cramped → Vast means doing both steps: ${gp(BASIC_ENLARGE.Cramped.cost + BASIC_ENLARGE.Roomy.cost)} and ${BASIC_ENLARGE.Cramped.days + BASIC_ENLARGE.Roomy.days} days in total (a brand-new Vast room is ${gp(BASIC_ADD.Vast.cost)} and ${BASIC_ADD.Vast.days} days).</li>
+        <li>Enlarging a basic room is purely cosmetic — it just makes your Bastion bigger.</li>
+        <li>Any number of rooms can be built or enlarged at once, and you don't need to be at your Bastion. Progress ticks along with each Bastion turn.</li>
+        <li>Special facilities are different: they can only be enlarged if their own card says so (usually ${gp(2000)} to Vast, for a real benefit).</li>
+      </ul>
+    </details>
     <div class="basics">${b.basics.map(x => basicRow(b, x)).join('')}</div>
     <div class="card addbasic">
       <b>Add a basic facility</b>
@@ -519,17 +542,35 @@ function specialCard(b, f) {
     ${def.passive ? `<p class="passive">${esc(def.passive)}</p>` : ''}
     ${facilityOptions(b, f)}
     ${facilityExtras(b, f)}
+    ${upgradeBlock(f)}
     <div class="hirelings"><span class="label">Hirelings (${hirelingCount(f)})</span>
       ${f.hirelings.map((h, i) => `<input data-hireling="${i}" value="${esc(h)}" placeholder="Hireling ${i + 1}">`).join('')}
     </div>
     <footer>
       ${status}
-      ${f.enlarging ? `<span class="pill build">Enlarging · ${f.enlarging.daysLeft} days</span>` : ''}
       <span class="spacer"></span>
-      ${def.enlarge && !f.enlarged && !f.enlarging ? `<button class="btn sm ghost" data-act="enlargeSpecial" title="${esc(def.enlarge.note)}">Enlarge (${gp(def.enlarge.cost)})</button>` : ''}
       <button class="btn sm ghost danger" data-act="removeSpecial">Remove</button>
     </footer>
   </article>`;
+}
+
+// Spells out the facility's upgrade path on the card so players don't need the book open.
+function upgradeBlock(f) {
+  const def = DEF[f.key]; const e = def.enlarge;
+  const from = `${def.space} (${SPACES[def.space].squares} sq)`, to = `Vast (${SPACES.Vast.squares} sq)`;
+  if (!e) {
+    return `<div class="upgrade none"><span class="label">Upgrade</span> ${def.space === 'Vast' ? 'Already Vast — this is its full size.' : `Stays ${esc(def.space)} — the DMG gives this facility no enlargement option.`}</div>`;
+  }
+  if (f.enlarged) return `<div class="upgrade done"><span class="label">Upgrade</span> ✔ Enlarged to ${to}. ${esc(e.note)}</div>`;
+  if (f.enlarging) {
+    const pct = Math.round(100 * (1 - f.enlarging.daysLeft / SPECIAL_ENLARGE_DAYS));
+    return `<div class="upgrade going"><span class="label">Upgrade</span> Enlarging ${from} → ${to} — <b>${f.enlarging.daysLeft} days left</b>. Keeps working normally meanwhile.
+      <div class="bar"><i style="width:${pct}%"></i></div><p class="small">When finished: ${esc(e.note)}</p></div>`;
+  }
+  return `<div class="upgrade"><span class="label">Upgrade available</span>
+    <p><b>Enlarge ${from} → ${to}</b> · ${gp(e.cost)} · ${SPECIAL_ENLARGE_DAYS} days<span class="verify" title="The DMG pages give only the cost; time assumed equal to a basic Roomy→Vast enlargement.">✱</span></p>
+    <p class="small">You get: ${esc(e.note)}</p>
+    <button class="btn sm" data-act="enlargeSpecial">Enlarge for ${gp(e.cost)}</button></div>`;
 }
 
 function facilityOptions(b, f) {
@@ -538,7 +579,12 @@ function facilityOptions(b, f) {
     const n = f.enlarged ? 2 : 1;
     for (let i = 0; i < n; i++) {
       const cur = f.options.garden[i] || 'Herb';
-      out.push(`<label class="field inline"><span>${n > 1 ? `Garden ${i + 1}` : 'Garden type'}</span><select data-opt="garden" data-idx="${i}" ${i === 0 ? 'disabled title="Use the Change Garden Type order (21 days)"' : ''}>${Object.keys(GARDEN_TYPES).map(t => `<option ${t === cur ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`);
+      // A garden's type is picked freely when it's built (or when a Vast enlargement adds the 2nd one).
+      // Once a Bastion turn has passed, changing it takes the 21-day Change Garden Type order.
+      const since = i === 0 ? f.addedTurn : f.enlargedTurn;
+      const locked = since != null && b.turn > since;
+      out.push(`<label class="field inline"><span>${n > 1 ? `Garden ${i + 1}` : 'Garden type'}</span><select data-opt="garden" data-idx="${i}" ${locked ? 'disabled' : ''}>${Object.keys(GARDEN_TYPES).map(t => `<option ${t === cur ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`);
+      out.push(`<p class="small">${locked ? 'Type is set — to change it, issue the <b>Change Garden Type</b> order on the Bastion Turn tab (21 days).' : 'Pick freely now; after your next Bastion turn, changing it takes a 21-day order.'}</p>`);
     }
     out.push(`<p class="small">Harvest: ${f.options.garden.slice(0, n).map(t => esc(GARDEN_TYPES[t])).join(' · ')}</p>`);
   }
@@ -601,7 +647,8 @@ function basicRow(b, x) {
     ${x.free ? '<span class="badge free">Free</span>' : ''}
     <span class="spacer"></span>
     ${x.building ? `<span class="pill build">${x.building.action === 'enlarge' ? `Enlarging to ${x.building.to}` : 'Under construction'} · ${x.building.daysLeft} days</span>`
-      : enl ? `<button class="btn xs ghost" data-act="enlargeBasic">Enlarge to ${enl.to} (${gp(enl.cost)}, ${enl.days}d)</button>` : ''}
+      : enl ? `<span class="small">Next size: ${enl.to} (${SPACES[enl.to].squares} sq)</span><button class="btn xs ghost" data-act="enlargeBasic">Enlarge · ${gp(enl.cost)} · ${enl.days} days</button>`
+      : '<span class="small">Max size</span>'}
     ${!x.free ? '<button class="btn xs ghost danger" data-act="removeBasic">✕</button>' : ''}
   </div>`;
 }
@@ -761,7 +808,7 @@ document.addEventListener('click', (e) => {
   if (el.dataset.close != null) { closeModal(); return; }
   if (el.dataset.mode) { b.mode = el.dataset.mode; commit(); return; }
   if (el.dataset.pick) {
-    const f = makeSpecial(el.dataset.pick); b.specials.push(f);
+    const f = makeSpecial(el.dataset.pick); f.addedTurn = b.turn; b.specials.push(f);
     addLog(b, `${DEF[f.key].name} added to the Bastion.`, 'build'); closeModal(); commit(); return;
   }
   if (el.dataset.evAct) { eventAction(el.dataset.evAct); return; }
@@ -792,7 +839,8 @@ document.addEventListener('click', (e) => {
       break;
     case 'enlargeSpecial': {
       const c = DEF[f.key].enlarge.cost;
-      if (b.gp < c && !confirm(`Enlarging costs ${gp(c)} but you have ${gp(b.gp)}. Go into debt?`)) return;
+      const debt = b.gp < c ? `\n\nYou only have ${gp(b.gp)} — this will put the treasury into debt.` : '';
+      if (!confirm(`Enlarge ${facName(f)} to Vast?\n\nCost: ${gp(c)} now · Time: ${SPECIAL_ENLARGE_DAYS} days\nYou get: ${DEF[f.key].enlarge.note}${debt}`)) return;
       spend(b, c, `Enlarge ${facName(f)}`); f.enlarging = { daysLeft: SPECIAL_ENLARGE_DAYS };
       addLog(b, `Work begins enlarging ${facName(f)} (${SPECIAL_ENLARGE_DAYS} days).`, 'build'); commit(); break;
     }
@@ -815,7 +863,8 @@ document.addEventListener('click', (e) => {
     }
     case 'enlargeBasic': {
       const v = BASIC_ENLARGE[basic.space];
-      if (b.gp < v.cost && !confirm(`This costs ${gp(v.cost)} but you have ${gp(b.gp)}. Go into debt?`)) return;
+      const debt = b.gp < v.cost ? `\n\nYou only have ${gp(b.gp)} — this will put the treasury into debt.` : '';
+      if (!confirm(`Enlarge ${basic.type} from ${basic.space} (${SPACES[basic.space].squares} sq) to ${v.to} (${SPACES[v.to].squares} sq)?\n\nCost: ${gp(v.cost)} now · Time: ${v.days} days\nCosmetic only — basic rooms have no game effect.${debt}`)) return;
       spend(b, v.cost, `Enlarge ${basic.type}`); basic.building = { action: 'enlarge', to: v.to, daysLeft: v.days };
       addLog(b, `Enlarging ${basic.type} to ${v.to} (${v.days} days).`, 'build'); commit(); break;
     }
@@ -845,7 +894,7 @@ document.addEventListener('change', (e) => {
     commit(); return;
   }
   if (el.dataset.bindCheck) { b[el.dataset.bindCheck] = el.checked; commit(); return; }
-  if (el.dataset.prereq) { b.prereqs[el.dataset.prereq] = el.checked; commit(); return; }
+  if (el.dataset.prereq) { prereqOpen[b.id] = true; b.prereqs[el.dataset.prereq] = el.checked; commit(); return; }
   if (el.dataset.act === 'enclosed') { b.walls.enclosed = el.checked; commit(); return; }
   const fid = el.closest('[data-fid]')?.dataset.fid;
   const f = fid && b.specials.find(x => x.id === fid);
@@ -889,6 +938,10 @@ function importFile(input) {
     state.activeId = list[0].id; commit(); toast(`Imported ${list.length} bastion${list.length > 1 ? 's' : ''}.`);
   }).catch(err => toast(`Import failed: ${err.message}`)).finally(() => { input.value = ''; });
 }
+// <details> 'toggle' doesn't bubble, so listen in the capture phase to remember open/closed.
+document.addEventListener('toggle', (e) => {
+  if (e.target.matches?.('[data-prereq-panel]') && B()) prereqOpen[B().id] = e.target.open;
+}, true);
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 
 render();

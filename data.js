@@ -195,7 +195,7 @@ const FACILITIES = [
       {
         id: 'retype', label: 'Change Garden Type', days: 21, cost: 0, effect: 'retype',
         choices: Object.keys(GARDEN_TYPES).map(v => ({ value: v, label: v })),
-        note: 'Requires you to be in your Bastion. No other activity here for 21 days.',
+        note: 'Requires you to be in your Bastion. No other activity here for 21 days. (On a Vast Garden this changes Garden 1.)',
       },
     ],
   },
