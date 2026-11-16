@@ -243,3 +243,9 @@ dialog h4 { margin: 1rem 0 .4rem; color: var(--gold); }
   .topbar { padding: .5rem 16px; }
   #bastionSelect { max-width: 100%; flex: 1; }
 }
+
+.sync { font-size: .82rem; padding: .15em .65em; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.sync::before { content: '●'; margin-right: .35em; }
+.sync.ok { color: var(--green); border-color: #7fae6a55; }
+.sync.saving, .sync.loading { color: var(--gold2); border-color: #d6a84a55; }
+.sync.offline { color: #e8a26a; border-color: #e8a26a66; }

@@ -7,12 +7,13 @@
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Crimson+Pro:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
   <header class="topbar">
     <div class="brand"><img class="crest" src="favicon.svg" alt=""> Kyle's Campaign Season 4 Bastions</div>
     <div class="top-actions">
+      <span id="syncStatus" class="sync loading">Connecting…</span>
       <select id="bastionSelect" aria-label="Choose bastion"></select>
       <button id="newBastion" class="btn">+ New Bastion</button>
       <button id="exportBtn" class="btn ghost" title="Download all bastions as JSON">Export</button>
@@ -25,9 +26,10 @@
   <dialog id="modal"><div id="modalBody"></div></dialog>
   <div id="toast" class="toast" hidden></div>
 
-  <footer class="foot">Rules summarized from the D&amp;D 2024 <em>Dungeon Master's Guide</em>, ch. 8 — see the book for full wording. Data is saved in this browser; use Export to back up or share.</footer>
+  <footer class="foot">Rules summarized from the D&amp;D 2024 <em>Dungeon Master's Guide</em>, ch. 8 — see the book for full wording. Bastions are shared with the whole party and save automatically.</footer>
 
-  <script src="data.js"></script>
-  <script src="app.js"></script>
+  <script src="sb-client.bundle.js?v=4"></script>
+  <script src="data.js?v=4"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

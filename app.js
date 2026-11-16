@@ -1,7 +1,15 @@
 'use strict';
-// Bastion Builder — state, rules engine, and UI. Pure vanilla JS, localStorage persistence.
+// Bastion Builder — state, rules engine, and UI. Vanilla JS; Bastions are shared through Supabase
+// (raided-hex project, table bb_bastions) with a localStorage cache for fast start-up and offline viewing.
 
-const KEY = 'bastion-builder-v1';
+const LEGACY_KEY = 'bastion-builder-v1';            // pre-sharing, per-browser saves
+const LEGACY_DONE_KEY = 'bastion-builder-v1-handled';
+const CACHE_KEY = 'bastion-builder-cache-v2:' + (new URLSearchParams(location.search).get('campaign') || 'kyle-s4');
+const ACTIVE_KEY = 'bastion-builder-active';
+const CAMPAIGN = new URLSearchParams(location.search).get('campaign') || 'kyle-s4'; // ?campaign=xyz → separate list (used for testing)
+const SB_URL = 'https://uaoxvhihwiygrajicend.supabase.co';
+const SB_KEY = 'sb_publishable_91Zn_uJ9anW46vAClx6-bQ__wLL4fXl'; // publishable (browser-safe) key; RLS forbids deletes
+const sb = supabase.createClient(SB_URL, SB_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -13,24 +21,170 @@ const sum = (a) => a.reduce((x, y) => x + y, 0);
 const DEF = Object.fromEntries(FACILITIES.map(f => [f.key, f]));
 
 // ---------- state ----------
-let state = load();
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* storage blocked */ } };
+
+let state = { bastions: [], activeId: lsGet(ACTIVE_KEY) };
 let tab = 'facilities';
+let loaded = false;
 const prereqOpen = {}; // bastion id -> whether the prerequisites panel is expanded (UI-only, survives redraws)
 
-function load() {
-  try {
-    const s = JSON.parse(localStorage.getItem(KEY));
-    if (s && Array.isArray(s.bastions)) return s;
-  } catch { /* fresh start */ }
-  return { bastions: [], activeId: null };
-}
-function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { /* storage blocked */ } }
+// ---------- shared sync ----------
+const versions = {};   // id -> server version this browser last saw
+const synced = {};     // id -> JSON of the copy the server has (skip no-op writes)
+const inflight = {};   // id -> JSON currently being written (recognize our own realtime echo)
+const dirty = new Set();
+const chains = {};     // per-Bastion promise chain so writes land in order
+let pushTimer = null, retryTimer = null, pendingRender = false;
+
 function B() { return state.bastions.find(b => b.id === state.activeId) || null; }
+function setActive(id) { state.activeId = id; lsSet(ACTIVE_KEY, id || ''); }
+function save() { if (state.activeId) dirty.add(state.activeId); writeCache(); schedulePush(); }
 function commit() { save(); render(); }
+function writeCache() { lsSet(CACHE_KEY, JSON.stringify({ bastions: state.bastions, versions })); }
+
+function setSync(s, title = '') {
+  const el = $('#syncStatus'); if (!el) return;
+  el.className = `sync ${s}`;
+  el.textContent = { loading: 'Connecting…', ok: 'Saved', saving: 'Saving…', offline: 'Offline — will retry' }[s];
+  el.title = title || { ok: 'All changes are saved to the shared party list', offline: 'Changes are kept on this device and will upload when the connection returns' }[s] || '';
+}
+
+function schedulePush() {
+  if (!loaded) return;
+  clearTimeout(pushTimer);
+  setSync('saving');
+  pushTimer = setTimeout(flush, 500);
+}
+function flush() {
+  for (const id of [...dirty]) { dirty.delete(id); enqueue(id, () => pushOne(id)); }
+}
+function enqueue(id, fn) {
+  chains[id] = (chains[id] || Promise.resolve()).then(fn).catch(err => { console.error(err); dirty.add(id); offline(); });
+  return chains[id];
+}
+function offline() {
+  setSync('offline');
+  clearTimeout(retryTimer); retryTimer = setTimeout(flush, 5000);
+}
+function settle() { if (!dirty.size) setSync('ok'); }
+
+async function pushOne(id) {
+  const b = state.bastions.find(x => x.id === id);
+  if (!b) return settle();
+  const json = JSON.stringify(b);
+  if (json === synced[id]) return settle();
+  const v = versions[id];
+  inflight[id] = json;
+  const res = v == null
+    ? await sb.from('bb_bastions').insert({ id, campaign: CAMPAIGN, data: b }).select('version')
+    : await sb.from('bb_bastions').update({ data: b, version: v + 1 }).eq('id', id).eq('version', v).select('version');
+  delete inflight[id];
+  if (res.error) { dirty.add(id); return offline(); }
+  if (!res.data || !res.data.length) {
+    // Someone else saved this Bastion since we last loaded it — take theirs rather than overwrite.
+    await reloadOne(id);
+    toast(`Someone else just changed "${b.name}". Showing their latest version — please redo your last change.`);
+    return settle();
+  }
+  versions[id] = res.data[0].version;
+  synced[id] = json;
+  writeCache();
+  settle();
+}
+
+async function reloadOne(id) {
+  const { data, error } = await sb.from('bb_bastions').select('id,data,version').eq('id', id).maybeSingle();
+  if (error) return offline();
+  if (!data) return removeLocal(id);
+  acceptRow(data);
+  dirty.delete(id);
+  safeRender();
+}
+
+function acceptRow(row) {
+  versions[row.id] = row.version;
+  synced[row.id] = JSON.stringify(row.data);
+  const i = state.bastions.findIndex(x => x.id === row.id);
+  if (i >= 0) state.bastions[i] = row.data; else state.bastions.push(row.data);
+  writeCache();
+}
+function removeLocal(id) {
+  state.bastions = state.bastions.filter(x => x.id !== id);
+  delete versions[id]; delete synced[id]; dirty.delete(id);
+  if (state.activeId === id) setActive(state.bastions[0]?.id || null);
+  writeCache(); safeRender();
+}
+
+// Don't yank an input out from under someone mid-typing; redraw when they leave the field.
+function safeRender() {
+  const a = document.activeElement;
+  if (a && a.closest && a.closest('#app') && /INPUT|SELECT|TEXTAREA/.test(a.tagName)) { pendingRender = true; return; }
+  render();
+}
+document.addEventListener('focusout', () => { if (pendingRender) { pendingRender = false; setTimeout(render, 0); } });
+
+function onRemote(p) {
+  if (p.eventType === 'DELETE') { if (p.old?.id) removeLocal(p.old.id); return; }
+  const row = p.new; if (!row || row.campaign !== CAMPAIGN) return;
+  const json = JSON.stringify(row.data);
+  if (json === inflight[row.id] || json === JSON.stringify(state.bastions.find(x => x.id === row.id))) {
+    versions[row.id] = Math.max(versions[row.id] || 0, row.version); synced[row.id] = json; return; // our own echo
+  }
+  if (row.version <= (versions[row.id] || 0)) return;
+  const hadLocal = dirty.has(row.id);
+  acceptRow(row); dirty.delete(row.id);
+  if (!B()) setActive(row.id);
+  if (hadLocal && row.id === state.activeId) toast(`Someone else changed "${row.data.name}" — showing their version.`);
+  safeRender();
+}
+
+async function boot() {
+  try { const c = JSON.parse(lsGet(CACHE_KEY)); if (c && Array.isArray(c.bastions)) { state.bastions = c.bastions; Object.assign(versions, c.versions || {}); } } catch { /* no cache */ }
+  render();
+  setSync('loading');
+  const { data, error } = await sb.from('bb_bastions').select('id,data,version').eq('campaign', CAMPAIGN).order('created_at');
+  if (error) {
+    loaded = true; render(); offline();
+    toast('Can\'t reach the shared list right now — showing this device\'s last copy.');
+    return;
+  }
+  // Anything in the cache the server has never seen was made offline: keep it and upload it.
+  const onServer = new Set(data.map(r => r.id));
+  const offlineMade = state.bastions.filter(b => !onServer.has(b.id) && versions[b.id] == null);
+  state.bastions = [];
+  for (const k of Object.keys(versions)) delete versions[k];
+  data.forEach(acceptRow);
+  offlineMade.forEach(b => { state.bastions.push(b); dirty.add(b.id); });
+  loaded = true;
+  await offerLegacyUpload(onServer);
+  if (!B()) setActive(state.bastions[0]?.id || null);
+  render();
+  if (dirty.size) schedulePush(); else setSync('ok');
+  sb.channel(`bb:${CAMPAIGN}`)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'bb_bastions', filter: `campaign=eq.${CAMPAIGN}` }, onRemote)
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'bb_bastions', filter: `campaign=eq.${CAMPAIGN}` }, onRemote)
+    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'bb_bastions' }, onRemote)
+    .subscribe();
+}
+
+// Bastions made before sharing existed live only in that player's browser — offer to upload them once.
+async function offerLegacyUpload(onServer) {
+  if (lsGet(LEGACY_DONE_KEY)) return;
+  let legacy = [];
+  try { legacy = (JSON.parse(lsGet(LEGACY_KEY))?.bastions || []).filter(b => b && b.id && !onServer.has(b.id)); } catch { /* none */ }
+  if (!legacy.length) { lsSet(LEGACY_DONE_KEY, '1'); return; }
+  const names = legacy.map(b => `• ${b.name}${b.character ? ` (${b.character})` : ''}`).join('\n');
+  if (confirm(`This device has ${legacy.length} Bastion${legacy.length > 1 ? 's' : ''} saved from before the party list was shared:\n\n${names}\n\nAdd ${legacy.length > 1 ? 'them' : 'it'} to the shared list so everyone can see ${legacy.length > 1 ? 'them' : 'it'}?`)) {
+    for (const b of legacy) { state.bastions.push(b); dirty.add(b.id); }
+    setActive(legacy[0].id);
+  }
+  lsSet(LEGACY_DONE_KEY, '1'); // the old save stays in localStorage untouched either way
+}
 
 function newBastion(name = 'New Bastion') {
   const b = {
-    id: uid(), name, character: '', level: 5, prereqs: {}, gp: 0, day: 0, turn: 0, turnLength: 7,
+    id: uid() + uid(), name, character: '', level: 5, prereqs: {}, gp: 0, day: 0, turn: 0, turnLength: 7,
     basics: [
       { id: uid(), type: 'Bedroom', space: 'Roomy', free: true, building: null },
       { id: uid(), type: 'Kitchen', space: 'Cramped', free: true, building: null },
@@ -40,7 +194,7 @@ function newBastion(name = 'New Bastion') {
     stash: [], log: [], pendingEvent: null, present: true, mode: 'orders', draft: {},
   };
   state.bastions.push(b);
-  state.activeId = b.id;
+  setActive(b.id);
   addLog(b, 'Bastion founded.');
   return b;
 }
@@ -400,7 +554,7 @@ function render() {
   renderTop();
   const b = B();
   const app = $('#app');
-  if (!b) { app.innerHTML = emptyView(); return; }
+  if (!b) { app.innerHTML = loaded ? emptyView() : '<div class="empty"><div class="empty-crest">♜</div><h1>Gathering the party&rsquo;s Bastions…</h1></div>'; return; }
   for (const f of b.specials) {
     f.options ||= {}; syncHirelings(f);
     if (f.addedTurn == null) f.addedTurn = b.turn; // backfill saves made before this field existed
@@ -427,9 +581,9 @@ function renderTop() {
 
 function emptyView() {
   return `<div class="empty">
-    <div class="empty-crest">⛫</div>
+    <div class="empty-crest">♜</div>
     <h1>Raise your Bastion</h1>
-    <p>At level 5, every adventurer can claim a Bastion — a home, a stronghold, and a place of power. Build its facilities, issue orders to its hirelings each Bastion turn, and weather whatever events befall it.</p>
+    <p>No Bastions in the party list yet. At level 5, every adventurer can claim a Bastion — a home, a stronghold, and a place of power. Build its facilities, issue orders to its hirelings each Bastion turn, and weather whatever events befall it.</p>
     <button class="btn big" data-act="new">Found a Bastion</button>
   </div>`;
 }
@@ -881,7 +1035,7 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('change', (e) => {
   const el = e.target; const b = B(); if (!b) return;
-  if (el.id === 'bastionSelect') { state.activeId = el.value; commit(); return; }
+  if (el.id === 'bastionSelect') { setActive(el.value); render(); return; }
   if (el.id === 'importInput') return importFile(el);
   if (el.dataset.bind) {
     b[el.dataset.bind] = el.dataset.num != null ? Math.max(1, parseInt(el.value, 10) || 1) : el.value;
@@ -928,8 +1082,8 @@ function importFile(input) {
     const data = JSON.parse(txt);
     const list = Array.isArray(data.bastions) ? data.bastions : (data.id && data.specials ? [data] : null);
     if (!list) throw new Error('Not a Bastion Builder export');
-    for (const nb of list) { const i = state.bastions.findIndex(x => x.id === nb.id); if (i >= 0) state.bastions[i] = nb; else state.bastions.push(nb); }
-    state.activeId = list[0].id; commit(); toast(`Imported ${list.length} bastion${list.length > 1 ? 's' : ''}.`);
+    for (const nb of list) { const i = state.bastions.findIndex(x => x.id === nb.id); if (i >= 0) state.bastions[i] = nb; else state.bastions.push(nb); dirty.add(nb.id); }
+    setActive(list[0].id); commit(); toast(`Imported ${list.length} bastion${list.length > 1 ? 's' : ''}.`);
   }).catch(err => toast(`Import failed: ${err.message}`)).finally(() => { input.value = ''; });
 }
 // <details> 'toggle' doesn't bubble, so listen in the capture phase to remember open/closed.
@@ -938,4 +1092,4 @@ document.addEventListener('toggle', (e) => {
 }, true);
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 
-render();
+boot();
