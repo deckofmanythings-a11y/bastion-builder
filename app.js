@@ -1005,7 +1005,8 @@ function connectionsView(b) {
     : `<div class="placeholder">${esc(b.name)} isn't connected to any other Bastion.</div>`;
 
   const groups = {}; const solo = [];
-  for (const x of state.bastions) { if (x.connection?.group && groupMembers(x).length > 1) (groups[x.connection.group] ||= []).push(x); else solo.push(x); }
+  const party = state.bastions.filter(x => (x.campaign || '') === (b.campaign || ''));
+  for (const x of party) { if (x.connection?.group && groupMembers(x).length > 1) (groups[x.connection.group] ||= []).push(x); else solo.push(x); }
 
   return `
     <div class="section-head"><h2>Connected Bastions</h2></div>
@@ -1020,7 +1021,8 @@ function connectionsView(b) {
       <p class="small">Joining a Bastion that's already in a group merges the groups.</p>
     </div>` : `<p class="hint">${state.bastions.length < 2 ? 'Once another player creates a Bastion, you can connect to it here.' : 'Every other Bastion is already in this group.'}</p>`}
 
-    <div class="section-head"><h2>Party Overview <small>${state.bastions.length} Bastion${state.bastions.length === 1 ? '' : 's'}</small></h2></div>
+    <div class="section-head"><h2>Party Overview <small>${b.campaign ? esc(b.campaign) + ' · ' : ''}${party.length} Bastion${party.length === 1 ? '' : 's'}</small></h2></div>
+    <p class="hint">${b.campaign ? `Showing only Bastions in <b>${esc(b.campaign)}</b>.` : 'This Bastion has no campaign yet, so this shows only other Bastions without one. Pick a campaign in the sidebar to see that party.'}</p>
     <div class="overview">
       ${Object.values(groups).map(list => `
         <div class="card ogroup">
