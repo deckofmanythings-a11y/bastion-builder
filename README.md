@@ -1,4 +1,4 @@
-# Bastion Builder
+# Kyle's Campaign Season 4 Bastions
 
 A web app for D&D 2024 players to build, expand, and run their Bastions (Dungeon Master's Guide, ch. 8):
 special & basic facilities, hirelings, defensive walls, Bastion turns and orders, Bastion events, a stash, and a chronicle.

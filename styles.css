@@ -60,6 +60,9 @@ select:disabled { opacity: .7; }
 }
 .brand { font-family: var(--display); font-size: 1.3rem; color: var(--gold2); }
 .crest { color: var(--gold); }
+.brand { display: flex; align-items: center; gap: .45em; }
+.brand img.crest { width: 1.35em; height: 1.35em; border-radius: 4px; flex: none; }
+@media (max-width: 520px) { .brand { font-size: 1.05rem; } }
 .top-actions { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
 #bastionSelect { max-width: 16rem; }
 

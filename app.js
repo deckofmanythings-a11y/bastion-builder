@@ -472,8 +472,7 @@ function sideView(b) {
       <div><span>Construction</span><b>${building}</b></div>
       <div><span>Floor area</span><b>${squaresUsed(b)} sq</b></div>
       <div><span>Walls</span><b>${b.walls.built} sq</b></div>
-    </div>
-    <button class="btn ghost danger wide" data-act="deleteBastion">Delete this Bastion</button>`;
+    </div>`;
 }
 
 // ----- facilities tab -----
@@ -823,11 +822,6 @@ document.addEventListener('click', (e) => {
   const basic = bid && b?.basics.find(x => x.id === bid);
   switch (el.dataset.act) {
     case 'new': newBastion(); commit(); break;
-    case 'deleteBastion':
-      if (confirm(`Delete "${b.name}" permanently? This can't be undone (export first if unsure).`)) {
-        state.bastions = state.bastions.filter(x => x.id !== b.id); state.activeId = state.bastions[0]?.id || null; commit();
-      }
-      break;
     case 'gp+': case 'gp-': {
       const amt = Math.abs(Number($('#gpAmt').value) || 0); if (!amt) return toast('Enter an amount.');
       const note = $('#gpNote').value.trim() || (el.dataset.act === 'gp+' ? 'Deposit' : 'Withdrawal');
