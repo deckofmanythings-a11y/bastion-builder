@@ -985,7 +985,8 @@ function bastionSummary(x) {
 function connectionsView(b) {
   const members = groupMembers(b);
   const c = b.connection;
-  const candidates = state.bastions.filter(x => x.id !== b.id && !(c && x.connection?.group === c.group));
+  const sameCamp = x => (x.campaign || '') === (b.campaign || '');
+  const candidates = state.bastions.filter(x => x.id !== b.id && sameCamp(x) && !(c && x.connection?.group === c.group));
   const kindSelect = (attrs, cur) => `<select ${attrs}>${Object.entries(CONNECTION_KINDS).map(([k, v]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}</select>`;
 
   const mine = c ? `
@@ -1005,7 +1006,7 @@ function connectionsView(b) {
     : `<div class="placeholder">${esc(b.name)} isn't connected to any other Bastion.</div>`;
 
   const groups = {}; const solo = [];
-  const party = state.bastions.filter(x => (x.campaign || '') === (b.campaign || ''));
+  const party = state.bastions.filter(sameCamp);
   for (const x of party) { if (x.connection?.group && groupMembers(x).length > 1) (groups[x.connection.group] ||= []).push(x); else solo.push(x); }
 
   return `
@@ -1019,7 +1020,7 @@ function connectionsView(b) {
       ${c ? '' : kindSelect('id="connKind"', 'combined')}
       <button class="btn sm" data-act="connect">Connect</button>
       <p class="small">Joining a Bastion that's already in a group merges the groups.</p>
-    </div>` : `<p class="hint">${state.bastions.length < 2 ? 'Once another player creates a Bastion, you can connect to it here.' : 'Every other Bastion is already in this group.'}</p>`}
+    </div>` : `<p class="hint">${state.bastions.filter(sameCamp).length < 2 ? (b.campaign ? `No other Bastions in ${esc(b.campaign)} yet. Once another player in this campaign creates one, you can connect to it here.` : 'Pick a campaign in the sidebar to connect with Bastions in that campaign.') : 'Every other Bastion in this campaign is already in this group.'}</p>`}
 
     <div class="section-head"><h2>Party Overview <small>${b.campaign ? esc(b.campaign) + ' · ' : ''}${party.length} Bastion${party.length === 1 ? '' : 's'}</small></h2></div>
     <p class="hint">${b.campaign ? `Showing only Bastions in <b>${esc(b.campaign)}</b>.` : 'This Bastion has no campaign yet, so this shows only other Bastions without one. Pick a campaign in the sidebar to see that party.'}</p>
