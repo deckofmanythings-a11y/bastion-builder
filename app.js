@@ -42,6 +42,56 @@ function setActive(id) { state.activeId = id; lsSet(ACTIVE_KEY, id || ''); }
 function save() { if (state.activeId) dirty.add(state.activeId); writeCache(); schedulePush(); }
 function commit() { save(); render(); }
 function writeCache() { lsSet(CACHE_KEY, JSON.stringify({ bastions: state.bastions, versions })); }
+// Mark other Bastions (not just the active one) as changed, e.g. every member of a connection group.
+function touch(list) { for (const x of list) dirty.add(x.id); }
+
+// ---------- connected Bastions ----------
+// A connection group is stored on every member as b.connection = { group, name, kind, notes }.
+// Editing the group writes the same values to each member's row.
+const CONNECTION_KINDS = {
+  combined: { label: 'Combined into one structure', note: 'DMG "Combining Bastions": each still has its own special facilities, orders, and hirelings (hirelings can\'t be sent or shared). If an event costs one Bastion defenders, another owner in the group can take all or some of those losses instead.' },
+  neighbors: { label: 'Neighbors (within 1 mile)', note: 'Separate buildings close together — a Masons\' Guild can build walls for a neighbor\'s Bastion within 1 mile.' },
+  circle: { label: 'Linked by Teleportation Circle', note: 'Separate sites joined by magic. Record which facilities hold the circles in the notes.' },
+  other: { label: 'Allied / other', note: 'An informal link — describe it in the notes.' },
+};
+function groupMembers(b) {
+  const g = b?.connection?.group;
+  return g ? state.bastions.filter(x => x.connection?.group === g) : [];
+}
+function connectionPartners(b) { return groupMembers(b).filter(x => x.id !== b.id); }
+function ownerLabel(x) { return `${x.name}${x.character ? ` (${x.character})` : ''}`; }
+
+function connectBastions(b, other, kind) {
+  const target = other.connection?.group ? groupMembers(other) : [other];
+  const mine = b.connection?.group ? groupMembers(b) : [b];
+  const base = other.connection || b.connection || {};
+  const conn = {
+    group: base.group || uid() + uid(),
+    name: base.name || `${b.name} & ${other.name}`,
+    kind: base.kind || kind || 'combined',
+    notes: base.notes || '',
+  };
+  const all = [...new Set([...target, ...mine])];
+  for (const x of all) {
+    x.connection = { ...conn };
+    addLog(x, `Connected Bastions: now part of "${conn.name}" with ${all.filter(y => y !== x).map(ownerLabel).join(', ')}.`, 'build');
+  }
+  touch(all);
+}
+function disconnectBastion(b) {
+  const others = connectionPartners(b);
+  const name = b.connection?.name;
+  delete b.connection;
+  addLog(b, `Left the connected Bastions "${name}".`, 'build');
+  for (const x of others) addLog(x, `${ownerLabel(b)} is no longer connected to "${name}".`, 'build');
+  if (others.length === 1) delete others[0].connection; // a group of one isn't a connection
+  touch([b, ...others]);
+}
+function updateGroup(b, field, value) {
+  const all = groupMembers(b);
+  for (const x of all) x.connection[field] = value;
+  touch(all);
+}
 
 function setSync(s, title = '') {
   const el = $('#syncStatus'); if (!el) return;
@@ -497,6 +547,7 @@ function resolveEvent(b, r) {
       else ev.lines.push('No defenders lost — the attack is repelled.');
       if (b.armoryStocked) { b.armoryStocked = false; ev.lines.push('Armory equipment is expended.'); }
       ev.lines.push('Any visiting Teleportation Circle spellcaster departs.');
+      if (b.connection?.kind === 'combined' && connectionPartners(b).length) ev.lines.push(`Combined Bastion: ${connectionPartners(b).map(ownerLabel).join(', ')} may take all or some of these defender losses instead.`);
       break;
     }
     case 'criminal': {
@@ -564,10 +615,10 @@ function render() {
     <aside class="side">${sideView(b)}</aside>
     <section class="main">
       <nav class="tabs">
-        ${[['facilities', 'Facilities'], ['turn', 'Bastion Turn'], ['stash', 'Stash & Defenders'], ['log', 'Chronicle']]
-          .map(([k, l]) => `<button class="tab ${tab === k ? 'on' : ''}" data-tab="${k}">${l}${k === 'turn' && b.pendingEvent ? ' <span class="dot"></span>' : ''}</button>`).join('')}
+        ${[['facilities', 'Facilities'], ['turn', 'Bastion Turn'], ['stash', 'Stash & Defenders'], ['connections', 'Connections'], ['log', 'Chronicle']]
+          .map(([k, l]) => `<button class="tab ${tab === k ? 'on' : ''}" data-tab="${k}">${l}${k === 'turn' && b.pendingEvent ? ' <span class="dot"></span>' : ''}${k === 'connections' && connectionPartners(b).length ? ` <small class="tabcount">${connectionPartners(b).length}</small>` : ''}</button>`).join('')}
       </nav>
-      <div class="panel">${tab === 'facilities' ? facilitiesView(b) : tab === 'turn' ? turnView(b) : tab === 'stash' ? stashView(b) : logView(b)}</div>
+      <div class="panel">${tab === 'facilities' ? facilitiesView(b) : tab === 'turn' ? turnView(b) : tab === 'stash' ? stashView(b) : tab === 'connections' ? connectionsView(b) : logView(b)}</div>
     </section>`;
 }
 
@@ -626,6 +677,7 @@ function sideView(b) {
       <div><span>Construction</span><b>${building}</b></div>
       <div><span>Floor area</span><b>${squaresUsed(b)} sq</b></div>
       <div><span>Walls</span><b>${b.walls.built} sq</b></div>
+      ${connectionPartners(b).length ? `<div class="conn-stat"><span>Connected</span><b>${esc(b.connection.name)}</b><small>with ${connectionPartners(b).map(x => esc(x.name)).join(', ')}</small></div>` : ''}
     </div>`;
 }
 
@@ -918,7 +970,71 @@ function stashView(b) {
       <div class="drow"><span>Armory</span><b>${hasFacility(b, 'armory') ? (b.armoryStocked ? 'Stocked (d8s)' : 'Depleted') : '—'}</b></div>
       <div class="drow"><span>Walls</span><b>${b.walls.built} sq${b.walls.enclosed ? ', fully enclosed (−2 dice)' : ''}</b></div>
       ${!barracks.length ? '<p class="small">Build a Barrack to recruit Bastion Defenders.</p>' : ''}
+      ${b.connection?.kind === 'combined' && connectionPartners(b).length ? `<p class="small conn-note">Combined with ${connectionPartners(b).map(x => esc(ownerLabel(x))).join(', ')}: if an event costs one of you defenders, another owner can take all or some of those losses instead — adjust the counts on each Bastion.</p>` : ''}
     </div>`;
+}
+
+function bastionSummary(x) {
+  return `${x.specials.length} special · ${totalDefenders(x)} defenders · ${gp(x.gp)} · turn ${x.turn}`;
+}
+
+function connectionsView(b) {
+  const members = groupMembers(b);
+  const c = b.connection;
+  const candidates = state.bastions.filter(x => x.id !== b.id && !(c && x.connection?.group === c.group));
+  const kindSelect = (attrs, cur) => `<select ${attrs}>${Object.entries(CONNECTION_KINDS).map(([k, v]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${esc(v.label)}</option>`).join('')}</select>`;
+
+  const mine = c ? `
+    <div class="card conn">
+      <label class="field"><span>Group name</span><input data-conn="name" value="${esc(c.name)}" placeholder="e.g. The Hollow Spire Compound"></label>
+      <label class="field"><span>How they're connected</span>${kindSelect('data-conn="kind"', c.kind)}</label>
+      <p class="small conn-note">${esc(CONNECTION_KINDS[c.kind]?.note || '')}</p>
+      <label class="field"><span>Notes (shared corridors, distances, who holds the keys…)</span><textarea data-conn="notes" rows="3" placeholder="DM's records">${esc(c.notes)}</textarea></label>
+      <span class="label">Members (${members.length})</span>
+      <div class="members">${members.map(x => `
+        <div class="member ${x.id === b.id ? 'me' : ''}">
+          <div><b>${esc(x.name)}</b>${x.character ? ` <span class="small">— ${esc(x.character)}, Lv ${x.level}</span>` : ''}<div class="small">${bastionSummary(x)}</div></div>
+          ${x.id === b.id ? '<span class="badge">This Bastion</span>' : `<button class="btn xs ghost" data-open-bastion="${x.id}">Open</button>`}
+        </div>`).join('')}</div>
+      <div class="row"><span class="spacer"></span><button class="btn sm ghost danger" data-act="disconnect">Disconnect this Bastion</button></div>
+    </div>`
+    : `<div class="placeholder">${esc(b.name)} isn't connected to any other Bastion.</div>`;
+
+  const groups = {}; const solo = [];
+  for (const x of state.bastions) { if (x.connection?.group && groupMembers(x).length > 1) (groups[x.connection.group] ||= []).push(x); else solo.push(x); }
+
+  return `
+    <div class="section-head"><h2>Connected Bastions</h2></div>
+    <p class="hint">Link Bastions that share a site, sit side by side, or are tied together some other way. Mostly for the DM's records — connecting doesn't change facilities, orders, or slots.</p>
+    ${mine}
+    ${candidates.length ? `
+    <div class="card addconn">
+      <b>${c ? 'Add another Bastion to this group' : 'Connect with…'}</b>
+      <select id="connTarget">${candidates.map(x => `<option value="${x.id}">${esc(ownerLabel(x))}${x.connection ? ` — in "${esc(x.connection.name)}"` : ''}</option>`).join('')}</select>
+      ${c ? '' : kindSelect('id="connKind"', 'combined')}
+      <button class="btn sm" data-act="connect">Connect</button>
+      <p class="small">Joining a Bastion that's already in a group merges the groups.</p>
+    </div>` : `<p class="hint">${state.bastions.length < 2 ? 'Once another player creates a Bastion, you can connect to it here.' : 'Every other Bastion is already in this group.'}</p>`}
+
+    <div class="section-head"><h2>Party Overview <small>${state.bastions.length} Bastion${state.bastions.length === 1 ? '' : 's'}</small></h2></div>
+    <div class="overview">
+      ${Object.values(groups).map(list => `
+        <div class="card ogroup">
+          <div class="row"><h3>${esc(list[0].connection.name)}</h3><span class="badge">${esc(CONNECTION_KINDS[list[0].connection.kind]?.label || '')}</span></div>
+          ${list[0].connection.notes ? `<p class="small">${esc(list[0].connection.notes)}</p>` : ''}
+          ${list.map(x => overviewRow(x, b)).join('')}
+        </div>`).join('')}
+      ${solo.length ? `<div class="card ogroup"><h3 class="muted-h">Standalone</h3>${solo.map(x => overviewRow(x, b)).join('')}</div>` : ''}
+    </div>`;
+}
+
+function overviewRow(x, b) {
+  return `<div class="orowv ${x.id === b.id ? 'me' : ''}">
+    <div><b>${esc(x.name)}</b>${x.character ? ` <span class="small">— ${esc(x.character)}, Lv ${x.level}</span>` : ''}
+      <div class="small">${x.specials.map(f => esc(DEF[f.key]?.name || f.key)).join(', ') || 'No special facilities yet'}</div>
+      <div class="small muted">${bastionSummary(x)}</div></div>
+    ${x.id === b.id ? '<span class="badge">Viewing</span>' : `<button class="btn xs ghost" data-open-bastion="${x.id}">Open</button>`}
+  </div>`;
 }
 
 function logView(b) {
@@ -954,10 +1070,11 @@ function toast(msg) {
 
 // ---------- events wiring ----------
 document.addEventListener('click', (e) => {
-  const el = e.target.closest('[data-act],[data-tab],[data-mode],[data-pick],[data-close],[data-ev-act],[data-pick-event],[data-creature-del]');
+  const el = e.target.closest('[data-act],[data-tab],[data-mode],[data-pick],[data-close],[data-ev-act],[data-pick-event],[data-creature-del],[data-open-bastion]');
   if (!el) return;
   const b = B();
   if (el.dataset.tab) { tab = el.dataset.tab; render(); return; }
+  if (el.dataset.openBastion) { setActive(el.dataset.openBastion); render(); window.scrollTo(0, 0); return; }
   if (el.dataset.close != null) { closeModal(); return; }
   if (el.dataset.mode) { b.mode = el.dataset.mode; commit(); return; }
   if (el.dataset.pick) {
@@ -1030,6 +1147,15 @@ document.addEventListener('click', (e) => {
     case 'claim': { const s = b.stash.find(x => x.id === el.closest('[data-sid]').dataset.sid); b.stash = b.stash.filter(x => x !== s); addLog(b, `Claimed from stash: ${s.text}.`); commit(); break; }
     case 'addStash': { const t = $('#stashText').value.trim(); if (!t) return; b.stash.push({ id: uid(), text: t, from: 'Manual', turn: b.turn }); commit(); break; }
     case 'clearLog': if (confirm('Clear the chronicle?')) { b.log = []; commit(); } break;
+    case 'connect': {
+      const other = state.bastions.find(x => x.id === $('#connTarget').value);
+      if (!other) return;
+      connectBastions(b, other, $('#connKind')?.value);
+      commit(); toast(`Connected with ${other.name}.`); break;
+    }
+    case 'disconnect':
+      if (confirm(`Disconnect ${b.name} from "${b.connection.name}"? The other Bastions stay connected to each other.`)) { disconnectBastion(b); commit(); }
+      break;
   }
 });
 
@@ -1042,6 +1168,7 @@ document.addEventListener('change', (e) => {
     commit(); return;
   }
   if (el.dataset.bindCheck) { b[el.dataset.bindCheck] = el.checked; commit(); return; }
+  if (el.dataset.conn && b.connection) { updateGroup(b, el.dataset.conn, el.value); commit(); return; }
   if (el.dataset.prereq) { prereqOpen[b.id] = true; b.prereqs[el.dataset.prereq] = el.checked; commit(); return; }
   if (el.dataset.act === 'enclosed') { b.walls.enclosed = el.checked; commit(); return; }
   const fid = el.closest('[data-fid]')?.dataset.fid;

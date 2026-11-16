@@ -101,7 +101,7 @@ select:disabled { opacity: .7; }
 .stats span { font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
 .stats b { font-family: var(--display); font-size: 1.1rem; }
 
-.tabs { display: flex; gap: .2rem; border-bottom: 1px solid var(--line); margin-bottom: 1rem; overflow-x: auto; }
+.tabs { display: flex; flex-wrap: wrap; gap: .2rem; border-bottom: 1px solid var(--line); margin-bottom: 1rem; }
 .tab { background: none; border: 0; border-bottom: 3px solid transparent; padding: .5em 1em; cursor: pointer; color: var(--ink2); font-family: var(--display); font-size: .95rem; white-space: nowrap; }
 .tab.on { color: var(--gold2); border-bottom-color: var(--gold); }
 .dot { display: inline-block; width: .5em; height: .5em; border-radius: 50%; background: var(--red); vertical-align: middle; }
@@ -249,3 +249,23 @@ dialog h4 { margin: 1rem 0 .4rem; color: var(--gold); }
 .sync.ok { color: var(--green); border-color: #7fae6a55; }
 .sync.saving, .sync.loading { color: var(--gold2); border-color: #d6a84a55; }
 .sync.offline { color: #e8a26a; border-color: #e8a26a66; }
+
+/* connections */
+.conn textarea { background: var(--bg2); border: 1px solid var(--line); border-radius: 6px; padding: .4em .5em; font: inherit; color: inherit; resize: vertical; width: 100%; }
+.conn textarea:focus { outline: 2px solid var(--gold); }
+.conn-note { border-left: 3px solid var(--blue); padding-left: .6em; }
+.members { display: flex; flex-direction: column; gap: .35rem; margin: .3rem 0 .6rem; }
+.member, .orowv { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .45rem .6rem; border: 1px solid var(--line); border-radius: 8px; background: var(--bg2); }
+.member.me, .orowv.me { border-color: var(--gold); }
+.addconn { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .7rem; }
+.addconn p { width: 100%; margin: 0; }
+.overview { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: .8rem; }
+.ogroup { display: flex; flex-direction: column; gap: .4rem; }
+.ogroup .row h3 { flex: 1; }
+.muted-h { color: var(--muted); }
+.small.muted { color: var(--muted); }
+.tabcount { font-family: var(--serif); background: var(--gold); color: #20180e; border-radius: 99px; padding: 0 .45em; font-size: .75rem; }
+.stats .conn-stat { grid-column: 1 / -1; }
+.stats .conn-stat b { font-size: 1rem; }
+.stats .conn-stat small { color: var(--muted); }
+@media (max-width: 860px) { .overview { grid-template-columns: 1fr; } }
