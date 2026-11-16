@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bastion Builder</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Crimson+Pro:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="crest">⛫</span> Bastion Builder</div>
+    <div class="top-actions">
+      <select id="bastionSelect" aria-label="Choose bastion"></select>
+      <button id="newBastion" class="btn">+ New Bastion</button>
+      <button id="exportBtn" class="btn ghost" title="Download all bastions as JSON">Export</button>
+      <label class="btn ghost" title="Load bastions from a JSON export">Import<input id="importInput" type="file" accept="application/json" hidden></label>
+    </div>
+  </header>
+
+  <main id="app"></main>
+
+  <dialog id="modal"><div id="modalBody"></div></dialog>
+  <div id="toast" class="toast" hidden></div>
+
+  <footer class="foot">Rules summarized from the D&amp;D 2024 <em>Dungeon Master's Guide</em>, ch. 8 — see the book for full wording. Data is saved in this browser; use Export to back up or share.</footer>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
