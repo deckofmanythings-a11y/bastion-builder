@@ -97,6 +97,7 @@ const GAMING_HALL_TABLE = [
   { max: 100, dice: 10, label: '10d6 × 10 GP' },
 ];
 
+const CAMPAIGNS = ['Cobalt Storm', 'Scarlet Storm', 'Storm of the Endless Night', 'Wild Storm'];
 const SAVES = ['Strength', 'Dexterity', 'Constitution', 'Intelligence', 'Wisdom', 'Charisma'];
 
 const TRAINERS = {

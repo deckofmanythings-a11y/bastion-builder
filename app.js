@@ -647,6 +647,10 @@ function sideView(b) {
     <div class="card">
       <label class="field"><span>Bastion name</span><input data-bind="name" value="${esc(b.name)}"></label>
       <label class="field"><span>Character</span><input data-bind="character" value="${esc(b.character)}" placeholder="Who owns it?"></label>
+      <label class="field"><span>Campaign</span><select data-bind="campaign">
+        <option value="" ${!b.campaign ? 'selected' : ''}>— Choose campaign —</option>
+        ${[...CAMPAIGNS, ...(b.campaign && !CAMPAIGNS.includes(b.campaign) ? [b.campaign] : [])].map(c => `<option ${b.campaign === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}
+      </select></label>
       <label class="field"><span>Character level</span><input type="number" min="1" max="20" data-bind="level" data-num value="${b.level}"></label>
       ${b.level < 5 ? '<p class="warn">Bastions are normally gained at level 5.</p>' : ''}
       ${(() => {
@@ -993,7 +997,7 @@ function connectionsView(b) {
       <span class="label">Members (${members.length})</span>
       <div class="members">${members.map(x => `
         <div class="member ${x.id === b.id ? 'me' : ''}">
-          <div><b>${esc(x.name)}</b>${x.character ? ` <span class="small">— ${esc(x.character)}, Lv ${x.level}</span>` : ''}<div class="small">${bastionSummary(x)}</div></div>
+          <div><b>${esc(x.name)}</b>${x.character ? ` <span class="small">— ${esc(x.character)}, Lv ${x.level}</span>` : ''}${x.campaign ? ` <span class="badge">${esc(x.campaign)}</span>` : ''}<div class="small">${bastionSummary(x)}</div></div>
           ${x.id === b.id ? '<span class="badge">This Bastion</span>' : `<button class="btn xs ghost" data-open-bastion="${x.id}">Open</button>`}
         </div>`).join('')}</div>
       <div class="row"><span class="spacer"></span><button class="btn sm ghost danger" data-act="disconnect">Disconnect this Bastion</button></div>
@@ -1030,7 +1034,7 @@ function connectionsView(b) {
 
 function overviewRow(x, b) {
   return `<div class="orowv ${x.id === b.id ? 'me' : ''}">
-    <div><b>${esc(x.name)}</b>${x.character ? ` <span class="small">— ${esc(x.character)}, Lv ${x.level}</span>` : ''}
+    <div><b>${esc(x.name)}</b>${x.character ? ` <span class="small">— ${esc(x.character)}, Lv ${x.level}</span>` : ''}${x.campaign ? ` <span class="badge">${esc(x.campaign)}</span>` : ''}
       <div class="small">${x.specials.map(f => esc(DEF[f.key]?.name || f.key)).join(', ') || 'No special facilities yet'}</div>
       <div class="small muted">${bastionSummary(x)}</div></div>
     ${x.id === b.id ? '<span class="badge">Viewing</span>' : `<button class="btn xs ghost" data-open-bastion="${x.id}">Open</button>`}
