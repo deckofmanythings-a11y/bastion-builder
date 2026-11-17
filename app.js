@@ -722,6 +722,8 @@ function facilitiesView(b) {
       <button class="btn sm" data-act="addBasic">Commission</button>
     </div>
 
+    ${nooksCard(b)}
+
     <div class="section-head"><h2>Defensive Walls</h2></div>
     <div class="card walls">
       <p>20-ft walls with a walkway. Each 5-ft square costs ${gp(WALL.costPerSquare)} and takes ${WALL.daysPerSquare} days. If the Bastion is <b>completely enclosed</b>, attacks roll 2 fewer dice for defender losses.</p>
@@ -1110,6 +1112,44 @@ async function uploadMapFiles(files) {
   if (done) toast(`Uploaded ${done} map${done === 1 ? '' : 's'}.`);
 }
 
+// ----- closets, washrooms & nooks (free; carved out of a facility's own squares) -----
+function nookParents(b) {
+  return [...b.basics.filter(x => x.building?.action !== 'add').map(x => ({ ref: x.id, name: x.type, sq: SPACES[x.space].squares, space: x.space })),
+    ...b.specials.map(f => ({ ref: f.id, name: facName(f), sq: SPACES[facSpace(f)].squares, space: facSpace(f) }))];
+}
+const nookUsed = (b, ref, except) => (b.nooks || []).filter(n => n.parent === ref && n.id !== except).reduce((t, n) => t + (+n.squares || 0), 0);
+function nooksCard(b) {
+  const parents = nookParents(b), list = b.nooks || [];
+  const pSel = (cur, attrs) => `<select ${attrs}>${parents.map(p => `<option value="${p.ref}" ${p.ref === cur ? 'selected' : ''}>${esc(p.name)} (${p.space}, ${p.sq} sq)</option>`).join('')}${cur && !parents.some(p => p.ref === cur) ? '<option selected value="">(removed facility)</option>' : ''}</select>`;
+  const kSel = (cur, attrs) => `<select ${attrs}>${NOOK_KINDS.map(k => `<option ${k === cur ? 'selected' : ''}>${k}</option>`).join('')}</select>`;
+  return `
+    <div class="section-head"><h2>Closets, Washrooms &amp; Nooks</h2></div>
+    <p class="hint">Free and cosmetic. Each one is walled off inside a facility's existing squares, so it never adds area. A facility can give up to half its squares this way. They appear on the graph-paper map inside their room.</p>
+    <div class="card nooks">
+      ${list.length ? `<div class="nooklist">${list.map(n => `
+        <div class="nookrow" data-nook="${n.id}">
+          ${kSel(n.kind, 'data-nook-field="kind"')}
+          <input data-nook-field="label" value="${esc(n.label || '')}" placeholder="Name (optional)" maxlength="40">
+          <input type="number" min="1" max="18" data-nook-field="squares" value="${n.squares}" title="Squares (5 ft each)"> <span class="small">sq, inside</span>
+          ${pSel(n.parent, 'data-nook-field="parent"')}
+          <button class="btn xs ghost danger" data-nook-del="${n.id}" title="Remove">✕</button>
+        </div>`).join('')}</div>` : '<p class="small muted">None yet.</p>'}
+      ${parents.length ? `<div class="nookrow add">
+        ${kSel('Closet', 'id="nookKind"')}
+        <input id="nookSq" type="number" min="1" max="18" value="1" title="Squares (5 ft each)"> <span class="small">sq, inside</span>
+        ${pSel(parents[0].ref, 'id="nookParent"')}
+        <button class="btn sm" data-act="addNook">+ Add</button>
+      </div>` : ''}
+    </div>`;
+}
+function nookFits(b, ref, squares, except) {
+  const p = nookParents(b).find(x => x.ref === ref);
+  if (!p) return 'Pick a facility.';
+  const max = Math.floor(p.sq / 2), used = nookUsed(b, ref, except);
+  if (used + squares > max) return `${p.name} is ${p.sq} squares, so its closets and nooks can use at most ${max} in total (${used} already used).`;
+  return '';
+}
+
 // ----- generated graph-paper map -----
 function lineMapCard(b) {
   const lm = b.lineMap;
@@ -1119,21 +1159,72 @@ function lineMapCard(b) {
     <div class="card linemap-empty">
       <p>Draw an old-school graph-paper floor plan of ${esc(b.name)} from its facilities. Every room opens onto the central hall, so nobody walks through the kitchen to get to bed. Public rooms sit by the entrance, the service wing on one side, and private rooms on the other. Big Bastions get an upper floor and a cellar.</p>
       <div class="row">${floorsSel}<button class="btn" data-act="genMap">Draw map</button></div>
-    </div>`;
+    </div>
+    ${aiBox(b)}`;
   const stale = lm.sig !== mapSig(b);
   const problems = checkMap(lm.layout);
   return `
     <div class="section-head"><h2>Graph-Paper Map</h2>
-      <div class="row">${floorsSel}<button class="btn sm ghost" data-act="rerollMap" title="Shuffle into a different arrangement">New layout</button>
+      <div class="row">${lm.plan ? '' : floorsSel}<button class="btn sm ghost" data-act="rerollMap" title="Shuffle room sizes and sides, keeping the same plan">New layout</button>
       <button class="btn sm ghost" data-act="dlMapSvg">SVG</button><button class="btn sm ghost" data-act="dlMapPng">PNG</button>
       <button class="btn sm" data-act="saveMapPng" title="Add a PNG of this map to the uploaded maps">Save to Maps</button></div></div>
     ${stale ? `<div class="warnbar">This Bastion's facilities have changed since the map was drawn. <button class="btn xs" data-act="updateMap">Redraw map</button></div>` : ''}
     ${problems.length ? `<div class="warnbar">Layout check: ${problems.map(esc).join('; ')}</div>` : ''}
     <div class="linemap">${renderMapSVG(b, lm.layout)}</div>
-    <p class="small muted">Layout #${lm.seed.toString(36)}. Rooms still being built aren't shown until they're finished. "New layout" shuffles the arrangement; the map stays the same until someone redraws it.</p>`;
+    <p class="small muted">Layout #${lm.seed.toString(36)}. Rooms still being built aren't shown until they're finished. "New layout" shuffles the arrangement; the map stays the same until someone redraws it.</p>
+    ${aiBox(b)}`;
+}
+
+// ----- AI layout guidance (Supabase edge function bb-layout -> Claude) -----
+let aiBusy = null;       // bastion id with a request in flight
+const aiDraft = {};      // bastion id -> unsent request text (survives redraws)
+function aiBox(b) {
+  const lm = b.lineMap, plan = lm?.plan, busy = aiBusy === b.id;
+  return `<div class="card aibox">
+    <div class="row"><b>Ask the architect</b> <span class="badge">AI</span>
+      ${plan ? '<span class="spacer"></span><button class="btn xs ghost" data-act="clearPlan" title="Forget the AI plan and go back to the automatic layout">Back to automatic layout</button>' : ''}</div>
+    ${plan ? `<div class="aiplan"><div class="small muted">Last request: “${esc(lm.request || '')}”</div><p>${esc(plan.summary || '')}</p></div>` : ''}
+    <p class="small">${plan ? 'Ask for changes and the architect will revise this plan' : 'Describe the building and the architect will arrange your rooms'}, for example: “a three-storey wizard tower with my bedroom at the top”, “dug into a hillside, vault deepest”, “library next to my bedroom with a connecting door”, “put the smithy outside”. Every room keeps its own door onto the hall.</p>
+    <textarea id="aiLayout" rows="3" maxlength="800" placeholder="How should ${esc(b.name)} be laid out?" ${busy ? 'disabled' : ''}>${esc(aiDraft[b.id] || '')}</textarea>
+    <div class="row"><button class="btn" data-act="aiLayout" ${busy ? 'disabled' : ''}>${busy ? 'Planning… (up to a minute)' : plan ? 'Revise plan' : 'Plan it'}</button>
+      <span class="small muted">Each Bastion gets 15 AI plans a day.</span></div>
+  </div>`;
+}
+
+async function askArchitect(b) {
+  const text = ($('#aiLayout')?.value || '').trim();
+  aiDraft[b.id] = text;
+  if (!text) { toast('Describe the layout you want first.'); return; }
+  const bid = b.id;
+  const rooms = mapRooms(b).map(r => { const lb = mapLabel(b, r.ref, r.fb); const nk = (b.nooks || []).filter(n => n.parent === r.ref).map(n => (n.label || n.kind).toLowerCase()); return { ref: r.ref, name: lb.full + (nk.length ? ` (has ${nk.join(', ')})` : ''), type: r.basic || DEF[r.key]?.name || r.fb, space: lb.space, zone: r.zone }; });
+  if (!rooms.length) { toast('This Bastion has no rooms yet.'); return; }
+  const plan = b.lineMap?.plan;
+  const walls = b.walls?.enclosed ? 'fully enclosed' : b.walls?.built ? `${b.walls.built} squares built` : '';
+  aiBusy = bid; render();
+  try {
+    const r = await fetch(`${SB_URL}/functions/v1/bb-layout`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB_KEY },
+      body: JSON.stringify({ campaign: CAMPAIGN, bastionId: bid, request: text, rooms,
+        current: plan ? { floors: plan.floors, outdoor: plan.outdoor, pairs: plan.pairs, secret: plan.secret } : null,
+        bastion: { name: b.name, walls } }),
+    });
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok || !out.plan) { toast(out.message || `The architect couldn't plan that (${r.status}).`); return; }
+    const x = state.bastions.find(y => y.id === bid); if (!x) return;
+    const seed = x.lineMap?.seed ?? newSeed();
+    x.lineMap = { seed, floors: 'auto', plan: out.plan, request: text, sig: mapSig(x), layout: generateMap(x, { seed, plan: out.plan }) };
+    addLog(x, `Architect: ${text}`, 'build');
+    aiDraft[bid] = '';
+    dirty.add(bid); writeCache(); schedulePush();
+  } catch (err) {
+    toast('Could not reach the architect. Check your connection and try again.');
+  } finally {
+    aiBusy = null; render();
+  }
 }
 function drawLineMap(b, seed, floors) {
-  b.lineMap = { seed, floors, sig: mapSig(b), layout: generateMap(b, { seed, floors }) };
+  const plan = b.lineMap?.plan || null, request = b.lineMap?.request;
+  b.lineMap = { seed, floors, sig: mapSig(b), layout: generateMap(b, { seed, floors, plan }), ...(plan ? { plan, request } : {}) };
 }
 const newSeed = () => Math.floor(Math.random() * 2 ** 31);
 function mapFileName(b, ext) { return `${(b.name || 'bastion').replace(/[^\w\- ]+/g, '').trim() || 'bastion'} map.${ext}`; }
@@ -1175,10 +1266,11 @@ function toast(msg) {
 
 // ---------- events wiring ----------
 document.addEventListener('click', (e) => {
-  const el = e.target.closest('[data-act],[data-tab],[data-mode],[data-pick],[data-close],[data-ev-act],[data-pick-event],[data-creature-del],[data-open-bastion]');
+  const el = e.target.closest('[data-act],[data-tab],[data-mode],[data-pick],[data-close],[data-ev-act],[data-pick-event],[data-creature-del],[data-open-bastion],[data-nook-del]');
   if (!el) return;
   const b = B();
   if (el.dataset.tab) { tab = el.dataset.tab; render(); return; }
+  if (el.dataset.nookDel) { b.nooks = (b.nooks || []).filter(n => n.id !== el.dataset.nookDel); commit(); return; }
   if (el.dataset.openBastion) { setActive(el.dataset.openBastion); render(); window.scrollTo(0, 0); return; }
   if (el.dataset.close != null) { closeModal(); return; }
   if (el.dataset.mode) { b.mode = el.dataset.mode; commit(); return; }
@@ -1197,6 +1289,16 @@ document.addEventListener('click', (e) => {
   const bid = el.closest('[data-bid]')?.dataset.bid;
   const basic = bid && b?.basics.find(x => x.id === bid);
   switch (el.dataset.act) {
+    case 'addNook': {
+      const sq = Math.max(1, parseInt($('#nookSq').value, 10) || 1), parent = $('#nookParent').value;
+      const why = nookFits(b, parent, sq); if (why) { toast(why); return; }
+      (b.nooks ||= []).push({ id: uid(), kind: $('#nookKind').value, label: '', squares: sq, parent });
+      commit(); return;
+    }
+    case 'aiLayout': askArchitect(b); return;
+    case 'clearPlan':
+      if (confirm('Forget the architect\'s plan and go back to the automatic layout?')) { delete b.lineMap.plan; delete b.lineMap.request; drawLineMap(b, b.lineMap.seed, b.lineMap.floors); commit(); }
+      return;
     case 'genMap': drawLineMap(b, newSeed(), $('[data-map-floors]')?.value || 'auto'); addLog(b, 'Graph-paper map drawn.', 'build'); commit(); return;
     case 'rerollMap': drawLineMap(b, newSeed(), b.lineMap.floors); commit(); return;
     case 'updateMap': drawLineMap(b, b.lineMap.seed, b.lineMap.floors); commit(); return;
@@ -1277,6 +1379,17 @@ document.addEventListener('change', (e) => {
   if (el.id === 'bastionSelect') { setActive(el.value); render(); return; }
   if (el.id === 'importInput') return importFile(el);
   if (el.id === 'mapUpload') return uploadMaps(el);
+  if (el.id === 'aiLayout') { aiDraft[b.id] = el.value; return; }
+  if (el.dataset.nookField) {
+    const n = (b.nooks || []).find(x => x.id === el.closest('[data-nook]').dataset.nook); if (!n) return;
+    const k = el.dataset.nookField;
+    if (k === 'squares' || k === 'parent') {
+      const sq = k === 'squares' ? Math.max(1, parseInt(el.value, 10) || 1) : n.squares, parent = k === 'parent' ? el.value : n.parent;
+      const why = nookFits(b, parent, sq, n.id); if (why) { toast(why); render(); return; }
+      n.squares = sq; n.parent = parent;
+    } else n[k] = el.value.slice(0, 40);
+    commit(); return;
+  }
   if (el.dataset.mapFloors != null) { if (b.lineMap) { drawLineMap(b, b.lineMap.seed, el.value); commit(); } return; }
   if (el.dataset.mapCaption) { const m = (b.maps || []).find(x => x.id === el.dataset.mapCaption); if (m) { m.caption = el.value.slice(0, 120); commit(); } return; }
   if (el.dataset.bind) {

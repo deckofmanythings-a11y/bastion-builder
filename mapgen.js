@@ -44,9 +44,10 @@ function mapRooms(b) {
 }
 function mapSig(b) { return mapRooms(b).map(r => `${r.ref}:${r.sq}`).sort().join('|'); }
 
-function generateMap(b, { seed, floors = 'auto' }) {
+function generateMap(b, { seed, floors = 'auto', plan = null }) {
   const rng = mulberry32(seed >>> 0);
   const rooms = mapRooms(b);
+  if (plan) return finishLayout(b, seed, floors, ...planFloors(rooms, plan, rng), plan);
   const indoor = rooms.filter(r => r.zone !== 'outdoor' && r.zone !== 'demi');
   let ground = indoor, upper = [], cellar = [];
   if (floors !== 'single' && indoor.length > 7) {
@@ -62,16 +63,70 @@ function generateMap(b, { seed, floors = 'auto' }) {
   if (upper.length) fl.push(buildFloor('Upper Floor', upper, rng, { stairs: 'DN' }));
   if (cellar.length) fl.push(buildFloor('Cellar', cellar, rng, { stairs: 'UP' }));
   addYard(fl[0], rooms.filter(r => r.zone === 'outdoor'), rng);
-  const demi = rooms.filter(r => r.zone === 'demi').map(r => ({ ref: r.ref, fb: r.fb, x: 0, y: 0, w: 6, h: 6 }));
+  return finishLayout(b, seed, floors, fl, rooms.filter(r => r.zone === 'demi'), null);
+}
+
+function finishLayout(b, seed, floors, fl, demiRooms, plan) {
+  const demi = demiRooms.map(r => ({ ref: r.ref, fb: r.fb, x: 0, y: 0, w: 6, h: 6 }));
   // number rooms: floor by floor, west to east, north to south
   let n = 1;
   for (const f of fl) { f.rooms.sort((a, c) => a.x - c.x || a.y - c.y).forEach(r => { r.n = n++; }); f.plots.sort((a, c) => a.x - c.x || a.y - c.y).forEach(r => { r.n = n++; }); }
   demi.forEach(r => { r.n = n++; });
-  return { v: 1, seed: seed >>> 0, floors, sig: mapSig(b), fl, demi };
+  return { v: 1, seed: seed >>> 0, floors, sig: mapSig(b), fl, demi, notes: (plan && plan.notes) || '' };
 }
 
-function buildFloor(name, rooms, rng, { foyer, stairs }) {
-  const sized = rooms.map(r => { const [w, d] = pickR(rng, MAP_DIMS[r.sq] || MAP_DIMS[16]); return { ...r, w, d }; });
+// Build floors from an AI layout plan ({floors:[{name,level,east,west}], outdoor, pairs, secret}).
+// Rooms the plan forgot are placed by their usual zone; refs it invented are ignored. Every room still
+// gets its own hall door; the plan can only add connecting doors between neighbours.
+function planFloors(rooms, plan, rng) {
+  const byRef = new Map(rooms.map(r => [r.ref, r]));
+  const used = new Set();
+  const take = ref => { const r = byRef.get(ref); if (!r || used.has(ref) || r.zone === 'demi') return null; used.add(ref); return r; };
+  const outdoor = (plan.outdoor || []).map(take).filter(Boolean);
+  let pf = (plan.floors || []).map(f => ({ name: f.name || 'Floor', level: +f.level || 0, east: (f.east || []).map(take).filter(Boolean), west: (f.west || []).map(take).filter(Boolean) }));
+  if (!pf.some(f => f.level === 0)) pf.push({ name: 'Ground Floor', level: 0, east: [], west: [] });
+  const lv = new Map(); // merge duplicate levels
+  for (const f of pf) { const g = lv.get(f.level); if (g) { g.east.push(...f.east); g.west.push(...f.west); } else lv.set(f.level, f); }
+  // display order: entrance floor, then upward, then downward
+  const rank = l => (l === 0 ? 0 : l > 0 ? l : 100 - l);
+  pf = [...lv.values()].sort((a, c) => rank(a.level) - rank(c.level));
+  const ground = pf.find(f => f.level === 0);
+  for (const r of rooms) {
+    if (used.has(r.ref) || r.zone === 'demi') continue;
+    used.add(r.ref);
+    if (r.zone === 'outdoor') outdoor.push(r);
+    else if (r.zone === 'public' || r.zone === 'service') ground.east.push(r); else ground.west.push(r);
+  }
+  const levels = pf.map(f => f.level);
+  const fl = pf.map(f => {
+    const up = levels.some(l => l > f.level), dn = levels.some(l => l < f.level);
+    return buildFloor(f.name, null, rng, { foyer: f.level === 0, stairs: up && dn ? 'UP/DN' : up ? 'UP' : dn ? 'DN' : null,
+      wings: { east: f.east, west: f.west }, pairs: plan.pairs || [], secret: new Set(plan.secret || []) });
+  });
+  addYard(fl[0], outdoor, rng);
+  return [fl, rooms.filter(r => r.zone === 'demi')];
+}
+
+function buildFloor(name, rooms, rng, { foyer, stairs, wings = null, pairs = [], secret = new Set() }) {
+  const size = r => { const [w, d] = pickR(rng, MAP_DIMS[r.sq] || MAP_DIMS[16]); return { ...r, w, d }; };
+  let east, west, doorPairs;
+  if (wings) {
+    // AI plan: wing order as given; a pair listed consecutively becomes one block (kept side by side)
+    const isPair = (a, c) => pairs.some(p => (p.a === a.ref && p.b === c.ref) || (p.a === c.ref && p.b === a.ref));
+    const blocks = list => {
+      const out = [];
+      for (const r of list.map(size)) { const last = out[out.length - 1]; if (last && last.length < 3 && isPair(last[last.length - 1], r)) last.push(r); else out.push([r]); }
+      return out;
+    };
+    east = blocks(wings.east); west = blocks(wings.west);
+    doorPairs = pairs.filter(p => p.door).map(p => [p.a, p.b]);
+  } else {
+    [east, west, doorPairs] = zoneWings(rooms.map(size), rng);
+  }
+  return placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret });
+}
+
+function zoneWings(sized, rng) {
   const byZone = z => shuffleR(rng, sized.filter(r => (Array.isArray(z) ? z.includes(r.zone) : r.zone === z)));
   const pub = byZone('public'), svc = byZone('service'), priv = byZone(['private', 'top']), sec = byZone('secure');
   // Dining Room + Kitchen travel together as one block (dining nearer the foyer)
@@ -86,7 +141,10 @@ function buildFloor(name, rooms, rng, { foyer, stairs }) {
   // if one wing is far longer, let its outermost blocks spill to the other wing's far end
   while (len(east) - len(west) > 10 && east.length > 1) west.push(east.pop());
   while (len(west) - len(east) > 10 && west.length > 1) east.push(west.pop());
+  return [east, west, dining && kitchen ? [[dining.ref, kitchen.ref]] : []];
+}
 
+function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret }) {
   const placed = [], doors = [];
   const cur = { nE: stairs ? 1 : -1, nW: -1, sE: 1, sW: -1 };
   const side = { N: 0, S: 0 };
@@ -101,17 +159,17 @@ function buildFloor(name, rooms, rng, { foyer, stairs }) {
         const rect = { ref: r.ref, fb: r.fb, zone: r.zone, x, y, w: r.w, h: r.d, side: s };
         placed.push(rect);
         const dx = x + Math.floor(rng() * r.w);
-        doors.push({ x: dx, y: s === 'N' ? 0 : 2, o: 'h', kind: r.zone === 'secure' ? 'locked' : 'door' });
+        doors.push({ x: dx, y: s === 'N' ? 0 : 2, o: 'h', kind: secret.has(r.ref) ? 'secret' : r.zone === 'secure' ? 'locked' : 'door' });
       }
     }
   };
   // reset side balance per wing so both wings fill north and south evenly
   put(east, 1); side.N = side.S = 0; put(west, -1);
 
-  if (dining && kitchen) {
-    const a = placed.find(r => r.ref === dining.ref), c = placed.find(r => r.ref === kitchen.ref);
-    if (a.side === c.side && (a.x + a.w === c.x || c.x + c.w === a.x)) {
-      doors.push({ x: Math.max(a.x, c.x), y: a.side === 'N' ? -2 : 3, o: 'v', kind: 'door' });
+  for (const [ra, rc] of doorPairs) {
+    const a = placed.find(r => r.ref === ra), c = placed.find(r => r.ref === rc);
+    if (a && c && a.side === c.side && (a.x + a.w === c.x || c.x + c.w === a.x)) {
+      doors.push({ x: Math.max(a.x, c.x), y: a.side === 'N' ? -1 : 2, o: 'v', kind: 'door' });
     }
   }
   const xs = placed.flatMap(r => [r.x, r.x + r.w]).concat([-1, 1]);
@@ -201,8 +259,13 @@ function renderMapSVG(b, L) {
   const hasWalls = (b.walls?.built || 0) > 0 || b.walls?.enclosed;
   const panels = L.fl.map((f, i) => ({ f, box: floorBox(f, i === 0 && hasWalls) }));
   if (L.demi.length) panels.push({ demi: true, box: { x0: -2, y0: -2, x1: 13, y1: 8 + (L.demi.length - 1) * 8 } });
-  const PAD = 24, GAP = 36, TITLE = 64, PT = 26;
+  const PAD = 24, GAP = 36, TITLE = L.notes ? 86 : 64, PT = 26;
   let x = PAD; const maxH = Math.max(...panels.map(p => (p.box.y1 - p.box.y0) * MS));
+  for (const p of panels) { // widen narrow panels so their titles don't run into the next one
+    const title = p.demi ? 'DEMIPLANE' : p.f.name.toUpperCase();
+    const need = Math.ceil((title.length * 11 + 12) / MS);
+    if (p.box.x1 - p.box.x0 < need) { const extra = need - (p.box.x1 - p.box.x0); p.box.x0 -= Math.floor(extra / 2); p.box.x1 += Math.ceil(extra / 2); }
+  }
   for (const p of panels) { p.px = x; p.w = (p.box.x1 - p.box.x0) * MS; p.h = (p.box.y1 - p.box.y0) * MS; x += p.w + GAP; }
   const width = Math.max(x - GAP + PAD, 560);
   // key entries
@@ -210,7 +273,9 @@ function renderMapSVG(b, L) {
   for (const f of L.fl) for (const r of [...f.rooms, ...f.plots]) keyItems.push({ n: r.n, r, fl: f.name });
   L.demi.forEach(r => keyItems.push({ n: r.n, r, fl: 'Demiplane' }));
   keyItems.sort((a, c) => a.n - c.n);
-  const colW = 300, cols = Math.max(1, Math.floor((width - 2 * PAD) / colW)), rowsN = Math.ceil(keyItems.length / cols);
+  const keyLen = k => { const lb = mapLabel(b, k.r.ref, k.r.fb); const nk = (b.nooks || []).filter(x => x.parent === k.r.ref).map(x => `${x.label || x.kind} ${x.squares} sq`).join(', ');
+    return (String(k.n).length + 2 + lb.full.length) * 6.6 + (nk.length + 3) * 5.6 + (lb.space.length + 3 + (L.fl.length > 1 ? k.fl.length : 0)) * 5.4; };
+  const colW = Math.min(width - 2 * PAD, Math.max(300, Math.ceil(Math.max(0, ...keyItems.map(keyLen)) + 24))), cols = Math.max(1, Math.floor((width - 2 * PAD) / colW)), rowsN = Math.ceil(keyItems.length / cols);
   const keyY = TITLE + PT + maxH + 30, height = keyY + 28 + rowsN * 20 + 52;
   const e = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const out = [];
@@ -218,6 +283,7 @@ function renderMapSVG(b, L) {
   out.push(`<rect width="${width}" height="${height}" fill="#fbfcfe"/>`);
   out.push(`<text x="${PAD}" y="34" font-size="24" font-weight="700" fill="${INK}">${e(b.name)}</text>`);
   out.push(`<text x="${PAD}" y="54" font-size="13" fill="${INK}" opacity=".8">${e([b.character, b.campaign].filter(Boolean).join(' · '))}${b.character || b.campaign ? ' · ' : ''}1 square = 5 feet</text>`);
+  if (L.notes) out.push(`<text x="${PAD}" y="74" font-size="13" font-style="italic" fill="${INK}" opacity=".85">${e(L.notes)}</text>`);
 
   for (const p of panels) {
     const ox = p.px - p.box.x0 * MS, oy = TITLE + PT - p.box.y0 * MS;
@@ -254,15 +320,31 @@ function renderMapSVG(b, L) {
       out.push(`<path d="${d}" stroke="${INK}" stroke-width="1"/>`);
     }
     // walls
-    out.push(`<path d="${wallPath(f, X, Y)}" stroke="${INK}" stroke-width="3.2" stroke-linecap="square" fill="none"/>`);
+    const nooks = f.rooms.flatMap(r => placeNooks(b, r));
+    out.push(`<path d="${wallPath(f, X, Y, nooks)}" stroke="${INK}" stroke-width="3.2" stroke-linecap="square" fill="none"/>`);
     // doors
     for (const d of f.doors) {
       const cx = d.o === 'h' ? X(d.x + 0.5) : X(d.x), cy = d.o === 'h' ? Y(d.y) : Y(d.y + 0.5);
       const w = d.o === 'h' ? MS * 0.62 : MS * 0.32, h = d.o === 'h' ? MS * 0.32 : MS * 0.62;
+      if (d.kind === 'secret') {
+        out.push(d.o === 'h' ? `<path d="M${X(d.x)} ${cy}H${X(d.x + 1)}" stroke="${INK}" stroke-width="3.2"/>` : `<path d="M${cx} ${Y(d.y)}V${Y(d.y + 1)}" stroke="${INK}" stroke-width="3.2"/>`);
+        out.push(`<text x="${cx}" y="${cy + 4}" font-size="12" font-weight="700" font-style="italic" text-anchor="middle" fill="${INK}" stroke="#fff" stroke-width="3" paint-order="stroke">S</text>`);
+        continue;
+      }
       out.push(`<rect x="${cx - w / 2}" y="${cy - h / 2}" width="${w}" height="${h}" fill="${d.kind === 'locked' ? INK : '#fff'}" stroke="${INK}" stroke-width="1.4"/>`);
     }
+    for (const k of nooks) {
+      const d = k.door, cx = X(d.x + 0.5), cy = Y(d.y);
+      out.push(`<rect x="${cx - MS * 0.27}" y="${cy - MS * 0.14}" width="${MS * 0.54}" height="${MS * 0.28}" fill="#fff" stroke="${INK}" stroke-width="1.1"/>`);
+      out.push(`<text x="${X(k.x + k.w / 2)}" y="${Y(k.y + k.h / 2) + 3}" font-size="8" text-anchor="middle" fill="${INK}">${e(NOOK_ABBR[k.n.kind] || (k.n.label || k.n.kind || '?').slice(0, 2))}</text>`);
+    }
     if (f.stairs) { const s = f.stairs; out.push(`<text x="${X(s.x + s.w / 2)}" y="${Y(s.y + s.h / 2) + 4}" font-size="10" font-weight="700" text-anchor="middle" fill="${INK}" stroke="#fff" stroke-width="3" paint-order="stroke">${s.label}</text>`); }
-    for (const r of [...f.rooms, ...f.plots]) roomText(out, b, r, X(r.x + r.w / 2), Y(r.y + r.h / 2), r.w, r.h, e);
+    for (const r of f.plots) roomText(out, b, r, X(r.x + r.w / 2), Y(r.y + r.h / 2), r.w, r.h, e);
+    for (const r of f.rooms) {
+      const D = Math.max(0, ...nooks.filter(k => k.n.parent === r.ref).map(k => k.h));
+      const fy = r.side === 'S' ? r.y : r.y + D, fh = r.h - D;
+      roomText(out, b, r, X(r.x + r.w / 2), Y(fy + fh / 2), r.w, fh, e);
+    }
     if (f.front) out.push(`<text x="${X(0)}" y="${Y(f.front.y) + 14}" font-size="9" text-anchor="middle" fill="${INK}" stroke="#fff" stroke-width="3" paint-order="stroke">ENTRY</text>`);
     // Bastion walls
     if (p.box.wall) {
@@ -287,9 +369,10 @@ function renderMapSVG(b, L) {
   out.push(`<text x="${PAD}" y="${keyY}" font-size="15" font-weight="700" fill="${INK}" letter-spacing="1">KEY</text>`);
   keyItems.forEach((k, i) => {
     const c = Math.floor(i / rowsN), r = i % rowsN, lb = mapLabel(b, k.r.ref, k.r.fb);
-    out.push(`<text x="${PAD + c * colW}" y="${keyY + 24 + r * 20}" font-size="13" fill="${INK}"><tspan font-weight="700">${k.n}.</tspan> ${e(lb.full)}${lb.space ? ` <tspan opacity=".65" font-size="11">${lb.space}${L.fl.length > 1 || k.fl === 'Demiplane' ? ' · ' + e(k.fl) : ''}</tspan>` : ''}</text>`);
+    const nk = (b.nooks || []).filter(x => x.parent === k.r.ref).map(x => `${x.label || x.kind} ${x.squares} sq`).join(', ');
+    out.push(`<text x="${PAD + c * colW}" y="${keyY + 24 + r * 20}" font-size="13" fill="${INK}"><tspan font-weight="700">${k.n}.</tspan> ${e(lb.full)}${nk ? ` <tspan font-size="11">(${e(nk)})</tspan>` : ''}${lb.space ? ` <tspan opacity=".65" font-size="11">${lb.space}${L.fl.length > 1 || k.fl === 'Demiplane' ? ' · ' + e(k.fl) : ''}</tspan>` : ''}</text>`);
   });
-  out.push(`<text x="${PAD}" y="${height - 18}" font-size="11" fill="${INK}" opacity=".8">▭ door   ▬ locked door   ┅ fenced outdoor area   ═ Bastion wall (dashed = not yet built)   ⋯ path to the gate</text>`);
+  out.push(`<text x="${PAD}" y="${height - 18}" font-size="11" fill="${INK}" opacity=".8">▭ door   ▬ locked door   S secret door   Cl/WC closet, washroom… (inside its room)   ┅ fenced outdoor area   ═ Bastion wall (dashed = not yet built)   ⋯ path to the gate</text>`);
   out.push('</svg>');
   return out.join('');
 }
@@ -310,12 +393,13 @@ function roomText(out, b, r, cx, cy, w, h, e) {
 
 // Wall segments = every cell edge between two different regions (hall and stairs count as one),
 // minus door openings; merged into long runs.
-function wallPath(f, X, Y) {
+function wallPath(f, X, Y, nooks = []) {
   const m = new Map();
   f.hall.forEach(r => fillCells(m, r, 'hall'));
   if (f.stairs) fillCells(m, f.stairs, 'hall');
   f.rooms.forEach((r, i) => fillCells(m, r, 'r' + i));
-  const doorSet = new Set(f.doors.map(d => `${d.o}:${d.x}:${d.y}`));
+  nooks.forEach((k, i) => fillCells(m, k, 'k' + i));
+  const doorSet = new Set([...f.doors, ...nooks.map(k => k.door)].map(d => `${d.o}:${d.x}:${d.y}`));
   const xs = [...m.keys()].map(k => +k.split(',')[0]), ys = [...m.keys()].map(k => +k.split(',')[1]);
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
   const H = {}, V = {};
@@ -347,4 +431,22 @@ function svgToPngBlob(svg, scale = 2) {
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not draw the map')); };
     img.src = url;
   });
+}
+
+// Closets, washrooms etc. live inside their facility's squares, along the wall farthest from the hall.
+// They share one back strip just deep enough to hold them all; each opens into its own room.
+function placeNooks(b, r) {
+  const list = (b.nooks || []).filter(n => n.parent === r.ref);
+  if (!list.length || r.h < 2) return [];
+  const total = list.reduce((t, n) => t + Math.max(1, +n.squares || 1), 0);
+  const D = Math.min(r.h - 1, Math.max(1, Math.ceil(total / r.w)));
+  const out = []; let cx = r.x;
+  for (const n of list) {
+    const s = Math.max(1, +n.squares || 1), h = Math.min(D, s), w = Math.ceil(s / h);
+    if (cx + w > r.x + r.w) break; // no room left along the back wall; it still appears in the key
+    const y = r.side === 'S' ? r.y + r.h - h : r.y;
+    out.push({ n, x: cx, y, w, h, door: { x: cx + Math.floor((w - 1) / 2), y: r.side === 'S' ? y : y + h, o: 'h' } });
+    cx += w;
+  }
+  return out;
 }

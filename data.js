@@ -97,6 +97,9 @@ const GAMING_HALL_TABLE = [
   { max: 100, dice: 10, label: '10d6 × 10 GP' },
 ];
 
+// Free enclosures carved out of a facility's existing squares (never adds area)
+const NOOK_KINDS = ['Closet', 'Washroom', 'Privy', 'Bath', 'Wardrobe', 'Pantry', 'Linen cupboard', 'Alcove', 'Storage nook'];
+const NOOK_ABBR = { Closet: 'Cl', Washroom: 'WC', Privy: 'Pv', Bath: 'Ba', Wardrobe: 'Wd', Pantry: 'Pn', 'Linen cupboard': 'Ln', Alcove: 'Al', 'Storage nook': 'St' };
 const CAMPAIGNS = ['Cobalt Storm', 'Scarlet Storm', 'Storm of the Endless Night', 'Wild Storm'];
 const SAVES = ['Strength', 'Dexterity', 'Constitution', 'Intelligence', 'Wisdom', 'Charisma'];
 

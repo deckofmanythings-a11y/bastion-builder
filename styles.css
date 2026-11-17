@@ -286,3 +286,19 @@ dialog h4 { margin: 1rem 0 .4rem; color: var(--gold); }
 .linemap-empty .row, .section-head .row { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
 .linemap-empty .row { margin-top: .6rem; }
 .warnbar { background: #4a3418; border: 1px solid var(--gold); color: var(--gold2); border-radius: var(--radius); padding: .45rem .7rem; margin: .4rem 0; display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+
+/* ----- AI layout ----- */
+.aibox { margin-top: .8rem; display: flex; flex-direction: column; gap: .45rem; }
+.aibox .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.aibox .spacer { flex: 1; }
+.aibox textarea { width: 100%; background: var(--bg2); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: .45em .6em; font: inherit; resize: vertical; }
+.aiplan { border-left: 3px solid var(--gold); padding-left: .7rem; }
+.aiplan p { margin: .2rem 0 0; }
+
+/* ----- closets & nooks ----- */
+.nooks { display: flex; flex-direction: column; gap: .5rem; margin-bottom: .8rem; }
+.nooklist { display: flex; flex-direction: column; gap: .4rem; }
+.nookrow { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+.nookrow input[type=number] { width: 4.2em; }
+.nookrow input:not([type]) { width: 11em; }
+.nookrow.add { border-top: 1px dashed var(--line); padding-top: .5rem; }
