@@ -279,3 +279,10 @@ dialog h4 { margin: 1rem 0 .4rem; color: var(--gold); }
 .pdficon { font-family: var(--display); font-size: 1.6rem; color: var(--gold); border: 2px solid var(--gold); border-radius: 6px; padding: .3em .5em; }
 .mapcap { width: 100%; background: var(--bg2); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: .3em .5em; font: inherit; }
 .mapcard .row { display: flex; gap: .4rem; justify-content: flex-end; }
+
+/* ----- graph-paper map ----- */
+.linemap { background: #fbfcfe; border: 1px solid var(--line); border-radius: var(--radius); overflow: auto; max-height: 80vh; margin: .4rem 0; }
+.linemap svg { display: block; width: 100%; height: auto; min-width: 640px; }
+.linemap-empty .row, .section-head .row { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+.linemap-empty .row { margin-top: .6rem; }
+.warnbar { background: #4a3418; border: 1px solid var(--gold); color: var(--gold2); border-radius: var(--radius); padding: .45rem .7rem; margin: .4rem 0; display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }

@@ -1056,7 +1056,8 @@ const fmtBytes = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Mat
 function mapsView(b) {
   const maps = b.maps || [];
   return `
-    <div class="section-head"><h2>Maps</h2></div>
+    ${lineMapCard(b)}
+    <div class="section-head"><h2>Uploaded Maps</h2></div>
     <p class="hint">Upload your own maps of ${esc(b.name)} — floor plans, sketches, VTT battle maps. Everyone in the party (and the DM) can view and download them. PNG, JPG, WebP, GIF or PDF, up to 10 MB each.</p>
     <div class="card map-upload">
       <label class="btn">${uploading ? 'Uploading…' : '+ Upload maps'}<input id="mapUpload" type="file" multiple accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,image/png,image/jpeg,image/webp,image/gif,application/pdf" hidden ${uploading ? 'disabled' : ''}></label>
@@ -1079,8 +1080,8 @@ function mapCard(m) {
   </div>`;
 }
 
-async function uploadMaps(input) {
-  const files = [...input.files]; input.value = '';
+function uploadMaps(input) { const files = [...input.files]; input.value = ''; return uploadMapFiles(files); }
+async function uploadMapFiles(files) {
   const bid = state.activeId; if (!bid || !files.length) return;
   const ok = [];
   for (const file of files) {
@@ -1107,6 +1108,38 @@ async function uploadMaps(input) {
   }
   uploading--; render();
   if (done) toast(`Uploaded ${done} map${done === 1 ? '' : 's'}.`);
+}
+
+// ----- generated graph-paper map -----
+function lineMapCard(b) {
+  const lm = b.lineMap;
+  const floorsSel = `<select data-map-floors title="How many storeys"><option value="auto" ${lm?.floors !== 'single' ? 'selected' : ''}>Floors: automatic</option><option value="single" ${lm?.floors === 'single' ? 'selected' : ''}>Floors: single storey</option></select>`;
+  if (!lm) return `
+    <div class="section-head"><h2>Graph-Paper Map</h2></div>
+    <div class="card linemap-empty">
+      <p>Draw an old-school graph-paper floor plan of ${esc(b.name)} from its facilities. Every room opens onto the central hall, so nobody walks through the kitchen to get to bed. Public rooms sit by the entrance, the service wing on one side, and private rooms on the other. Big Bastions get an upper floor and a cellar.</p>
+      <div class="row">${floorsSel}<button class="btn" data-act="genMap">Draw map</button></div>
+    </div>`;
+  const stale = lm.sig !== mapSig(b);
+  const problems = checkMap(lm.layout);
+  return `
+    <div class="section-head"><h2>Graph-Paper Map</h2>
+      <div class="row">${floorsSel}<button class="btn sm ghost" data-act="rerollMap" title="Shuffle into a different arrangement">New layout</button>
+      <button class="btn sm ghost" data-act="dlMapSvg">SVG</button><button class="btn sm ghost" data-act="dlMapPng">PNG</button>
+      <button class="btn sm" data-act="saveMapPng" title="Add a PNG of this map to the uploaded maps">Save to Maps</button></div></div>
+    ${stale ? `<div class="warnbar">This Bastion's facilities have changed since the map was drawn. <button class="btn xs" data-act="updateMap">Redraw map</button></div>` : ''}
+    ${problems.length ? `<div class="warnbar">Layout check: ${problems.map(esc).join('; ')}</div>` : ''}
+    <div class="linemap">${renderMapSVG(b, lm.layout)}</div>
+    <p class="small muted">Layout #${lm.seed.toString(36)}. Rooms still being built aren't shown until they're finished. "New layout" shuffles the arrangement; the map stays the same until someone redraws it.</p>`;
+}
+function drawLineMap(b, seed, floors) {
+  b.lineMap = { seed, floors, sig: mapSig(b), layout: generateMap(b, { seed, floors }) };
+}
+const newSeed = () => Math.floor(Math.random() * 2 ** 31);
+function mapFileName(b, ext) { return `${(b.name || 'bastion').replace(/[^\w\- ]+/g, '').trim() || 'bastion'} map.${ext}`; }
+function downloadBlob(blob, name) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 function logView(b) {
@@ -1164,6 +1197,14 @@ document.addEventListener('click', (e) => {
   const bid = el.closest('[data-bid]')?.dataset.bid;
   const basic = bid && b?.basics.find(x => x.id === bid);
   switch (el.dataset.act) {
+    case 'genMap': drawLineMap(b, newSeed(), $('[data-map-floors]')?.value || 'auto'); addLog(b, 'Graph-paper map drawn.', 'build'); commit(); return;
+    case 'rerollMap': drawLineMap(b, newSeed(), b.lineMap.floors); commit(); return;
+    case 'updateMap': drawLineMap(b, b.lineMap.seed, b.lineMap.floors); commit(); return;
+    case 'dlMapSvg': downloadBlob(new Blob([renderMapSVG(b, b.lineMap.layout)], { type: 'image/svg+xml' }), mapFileName(b, 'svg')); return;
+    case 'dlMapPng':
+      svgToPngBlob(renderMapSVG(b, b.lineMap.layout)).then(bl => downloadBlob(bl, mapFileName(b, 'png'))).catch(err => toast(err.message)); return;
+    case 'saveMapPng':
+      svgToPngBlob(renderMapSVG(b, b.lineMap.layout)).then(bl => uploadMapFiles([new File([bl], mapFileName(b, 'png'), { type: 'image/png' })])).catch(err => toast(err.message)); return;
     case 'new': newBastion(); commit(); break;
     case 'gp+': case 'gp-': {
       const amt = Math.abs(Number($('#gpAmt').value) || 0); if (!amt) return toast('Enter an amount.');
@@ -1236,6 +1277,7 @@ document.addEventListener('change', (e) => {
   if (el.id === 'bastionSelect') { setActive(el.value); render(); return; }
   if (el.id === 'importInput') return importFile(el);
   if (el.id === 'mapUpload') return uploadMaps(el);
+  if (el.dataset.mapFloors != null) { if (b.lineMap) { drawLineMap(b, b.lineMap.seed, el.value); commit(); } return; }
   if (el.dataset.mapCaption) { const m = (b.maps || []).find(x => x.id === el.dataset.mapCaption); if (m) { m.caption = el.value.slice(0, 120); commit(); } return; }
   if (el.dataset.bind) {
     b[el.dataset.bind] = el.dataset.num != null ? Math.max(1, parseInt(el.value, 10) || 1) : el.value;
