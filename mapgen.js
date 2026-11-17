@@ -224,9 +224,11 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret, f
     return n;
   };
   // a room nobody pinned may take whichever of its usual shapes sits best over the floor below
-  const variants = blk => (blk.length === 1 && !blk[0].shape && blk[0].parts.length === 1
-    ? [...new Set((MAP_DIMS[blk[0].sq] || []).map(d => d.join('x')))].map(k => { const [w, d] = k.split('x').map(Number); return [{ ...blk[0], w, d, parts: [{ w, d }] }]; })
-    : [blk]);
+  // (in a paired block, every unpinned room tries its shapes, so a pair still fits)
+  const shapesOf = r => (!r.shape && r.parts.length === 1
+    ? [...new Set((MAP_DIMS[r.sq] || []).map(d => d.join('x')))].map(k => { const [w, d] = k.split('x').map(Number); return { ...r, w, d, parts: [{ w, d }] }; })
+    : [r]);
+  const variants = blk => blk.reduce((acc, r) => acc.flatMap(v => shapesOf(r).map(x => [...v, x])), [[]]);
   const choose = (blk, qs) => {
     let bestC = null;
     for (const q of qs) for (const v of [blk, ...variants(blk)]) {
