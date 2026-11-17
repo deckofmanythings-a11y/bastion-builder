@@ -615,10 +615,10 @@ function render() {
     <aside class="side">${sideView(b)}</aside>
     <section class="main">
       <nav class="tabs">
-        ${[['facilities', 'Facilities'], ['turn', 'Bastion Turn'], ['stash', 'Stash & Defenders'], ['connections', 'Connections'], ['log', 'Chronicle']]
-          .map(([k, l]) => `<button class="tab ${tab === k ? 'on' : ''}" data-tab="${k}">${l}${k === 'turn' && b.pendingEvent ? ' <span class="dot"></span>' : ''}${k === 'connections' && connectionPartners(b).length ? ` <small class="tabcount">${connectionPartners(b).length}</small>` : ''}</button>`).join('')}
+        ${[['facilities', 'Facilities'], ['turn', 'Bastion Turn'], ['stash', 'Stash & Defenders'], ['connections', 'Connections'], ['maps', 'Maps'], ['log', 'Chronicle']]
+          .map(([k, l]) => `<button class="tab ${tab === k ? 'on' : ''}" data-tab="${k}">${l}${k === 'turn' && b.pendingEvent ? ' <span class="dot"></span>' : ''}${k === 'connections' && connectionPartners(b).length ? ` <small class="tabcount">${connectionPartners(b).length}</small>` : ''}${k === 'maps' && b.maps?.length ? ` <small class="tabcount">${b.maps.length}</small>` : ''}</button>`).join('')}
       </nav>
-      <div class="panel">${tab === 'facilities' ? facilitiesView(b) : tab === 'turn' ? turnView(b) : tab === 'stash' ? stashView(b) : tab === 'connections' ? connectionsView(b) : logView(b)}</div>
+      <div class="panel">${tab === 'facilities' ? facilitiesView(b) : tab === 'turn' ? turnView(b) : tab === 'stash' ? stashView(b) : tab === 'connections' ? connectionsView(b) : tab === 'maps' ? mapsView(b) : logView(b)}</div>
     </section>`;
 }
 
@@ -979,7 +979,7 @@ function stashView(b) {
 }
 
 function bastionSummary(x) {
-  return `${x.specials.length} special · ${totalDefenders(x)} defenders · ${gp(x.gp)} · turn ${x.turn}`;
+  return `${x.specials.length} special · ${totalDefenders(x)} defenders · ${gp(x.gp)} · turn ${x.turn}${x.maps?.length ? ` · ${x.maps.length} map${x.maps.length === 1 ? '' : 's'}` : ''}`;
 }
 
 function connectionsView(b) {
@@ -1042,6 +1042,71 @@ function overviewRow(x, b) {
       <div class="small muted">${bastionSummary(x)}</div></div>
     ${x.id === b.id ? '<span class="badge">Viewing</span>' : `<button class="btn xs ghost" data-open-bastion="${x.id}">Open</button>`}
   </div>`;
+}
+
+// ----- maps tab -----
+const MAP_BUCKET = 'bb-maps';
+const MAP_MAX_BYTES = 10 * 1024 * 1024; // matches the bucket's file_size_limit
+const MAP_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', pdf: 'application/pdf' };
+let uploading = 0;
+
+const mapUrl = (m, download) => sb.storage.from(MAP_BUCKET).getPublicUrl(m.path, download ? { download: m.name } : undefined).data.publicUrl;
+const fmtBytes = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+
+function mapsView(b) {
+  const maps = b.maps || [];
+  return `
+    <div class="section-head"><h2>Maps</h2></div>
+    <p class="hint">Upload your own maps of ${esc(b.name)} — floor plans, sketches, VTT battle maps. Everyone in the party (and the DM) can view and download them. PNG, JPG, WebP, GIF or PDF, up to 10 MB each.</p>
+    <div class="card map-upload">
+      <label class="btn">${uploading ? 'Uploading…' : '+ Upload maps'}<input id="mapUpload" type="file" multiple accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,image/png,image/jpeg,image/webp,image/gif,application/pdf" hidden ${uploading ? 'disabled' : ''}></label>
+      <span class="small">Uploaded maps can't be deleted from the page — ask the DM if one needs removing.</span>
+    </div>
+    ${maps.length ? `<div class="maps">${maps.slice().reverse().map(m => mapCard(m)).join('')}</div>`
+      : '<div class="placeholder">No maps uploaded yet.</div>'}`;
+}
+
+function mapCard(m) {
+  const isPdf = m.type === 'application/pdf';
+  const url = mapUrl(m);
+  return `<div class="card mapcard" data-map="${m.id}">
+    <a class="mapthumb" href="${esc(url)}" target="_blank" rel="noopener" title="Open full size">
+      ${isPdf ? '<span class="pdficon">PDF</span>' : `<img src="${esc(url)}" alt="${esc(m.caption || m.name)}" loading="lazy">`}
+    </a>
+    <input class="mapcap" data-map-caption="${m.id}" value="${esc(m.caption)}" placeholder="Caption (e.g. Ground floor)">
+    <div class="small muted">${esc(m.name)} · ${fmtBytes(m.size)} · ${new Date(m.uploadedAt).toLocaleDateString()}</div>
+    <div class="row"><a class="btn xs ghost" href="${esc(url)}" target="_blank" rel="noopener">Open</a><a class="btn xs" href="${esc(mapUrl(m, true))}">Download</a></div>
+  </div>`;
+}
+
+async function uploadMaps(input) {
+  const files = [...input.files]; input.value = '';
+  const bid = state.activeId; if (!bid || !files.length) return;
+  const ok = [];
+  for (const file of files) {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const type = MAP_TYPES[ext] || (Object.values(MAP_TYPES).includes(file.type) ? file.type : null);
+    if (!type) { toast(`${file.name}: only PNG, JPG, WebP, GIF or PDF.`); continue; }
+    if (file.size > MAP_MAX_BYTES) { toast(`${file.name} is ${fmtBytes(file.size)} — the limit is 10 MB.`); continue; }
+    ok.push({ file, ext: ext in MAP_TYPES ? ext : Object.keys(MAP_TYPES).find(k => MAP_TYPES[k] === type), type });
+  }
+  if (!ok.length) return;
+  uploading++; render();
+  let done = 0;
+  for (const { file, ext, type } of ok) {
+    const id = uid() + uid();
+    const path = `${CAMPAIGN}/${bid}/${id}.${ext}`;
+    const { error } = await sb.storage.from(MAP_BUCKET).upload(path, file, { contentType: type, cacheControl: '31536000', upsert: false });
+    if (error) { toast(`Couldn't upload ${file.name}: ${error.message}`); continue; }
+    const b = state.bastions.find(x => x.id === bid); // re-find: a live update may have replaced the object
+    if (!b) continue;
+    (b.maps ||= []).push({ id, path, name: file.name, caption: file.name.replace(/\.[^.]+$/, ''), type, size: file.size, uploadedAt: new Date().toISOString() });
+    addLog(b, `Map uploaded: ${file.name}.`, 'build');
+    dirty.add(b.id); writeCache(); schedulePush();
+    done++;
+  }
+  uploading--; render();
+  if (done) toast(`Uploaded ${done} map${done === 1 ? '' : 's'}.`);
 }
 
 function logView(b) {
@@ -1170,6 +1235,8 @@ document.addEventListener('change', (e) => {
   const el = e.target; const b = B(); if (!b) return;
   if (el.id === 'bastionSelect') { setActive(el.value); render(); return; }
   if (el.id === 'importInput') return importFile(el);
+  if (el.id === 'mapUpload') return uploadMaps(el);
+  if (el.dataset.mapCaption) { const m = (b.maps || []).find(x => x.id === el.dataset.mapCaption); if (m) { m.caption = el.value.slice(0, 120); commit(); } return; }
   if (el.dataset.bind) {
     b[el.dataset.bind] = el.dataset.num != null ? Math.max(1, parseInt(el.value, 10) || 1) : el.value;
     commit(); return;
