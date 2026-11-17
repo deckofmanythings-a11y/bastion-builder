@@ -101,8 +101,10 @@ function generateMap(b, { seed, floors = 'auto', plan = null }) {
   }
   const stairs = upper.length && cellar.length ? 'UP/DN' : upper.length ? 'UP' : cellar.length ? 'DN' : null;
   const fl = [buildFloor('Ground Floor', ground, rng, { foyer: true, stairs })];
-  if (upper.length) fl.push(buildFloor('Upper Floor', upper, rng, { stairs: 'DN' }));
-  if (cellar.length) fl.push(buildFloor('Cellar', cellar, rng, { stairs: 'UP' }));
+  // other storeys are fitted into the ground floor's outline, so the building stacks and the stairs line up
+  const fit = groundFit(fl[0]);
+  if (upper.length) fl.push(buildFloor('Upper Floor', upper, rng, { stairs: 'DN', fit }));
+  if (cellar.length) fl.push(buildFloor('Cellar', cellar, rng, { stairs: 'UP', fit }));
   addYard(fl[0], rooms.filter(r => r.zone === 'outdoor'), rng);
   return finishLayout(b, seed, floors, fl, rooms.filter(r => r.zone === 'demi'), null);
 }
@@ -147,16 +149,17 @@ function planFloors(rooms, plan, rng) {
     else if (r.zone === 'public' || r.zone === 'service') ground.east.push(r); else ground.west.push(r);
   }
   const levels = pf.map(f => f.level);
-  const fl = pf.map(f => {
+  const fl = [];
+  for (const f of pf) { // ground floor first, so the others can be fitted into its outline
     const up = levels.some(l => l > f.level), dn = levels.some(l => l < f.level);
-    return buildFloor(f.name, null, rng, { foyer: f.level === 0, stairs: up && dn ? 'UP/DN' : up ? 'UP' : dn ? 'DN' : null,
-      wings: { east: f.east, west: f.west }, pairs: plan.pairs || [], secret: new Set(plan.secret || []) });
-  });
+    fl.push(buildFloor(f.name, null, rng, { foyer: f.level === 0, stairs: up && dn ? 'UP/DN' : up ? 'UP' : dn ? 'DN' : null,
+      wings: { east: f.east, west: f.west }, pairs: plan.pairs || [], secret: new Set(plan.secret || []), fit: f.level === 0 ? null : groundFit(fl[0]) }));
+  }
   addYard(fl[0], outdoor, rng);
   return [fl, rooms.filter(r => r.zone === 'demi')];
 }
 
-function buildFloor(name, rooms, rng, { foyer, stairs, wings = null, pairs = [], secret = new Set() }) {
+function buildFloor(name, rooms, rng, { foyer, stairs, wings = null, pairs = [], secret = new Set(), fit = null }) {
   const size = r => {
     const parts = roomDims(r, rng, MAP_DIMS);
     return { ...r, parts, w: parts.reduce((t, p) => t + p.w, 0), d: Math.max(...parts.map(p => p.d)) };
@@ -175,7 +178,7 @@ function buildFloor(name, rooms, rng, { foyer, stairs, wings = null, pairs = [],
   } else {
     [east, west, doorPairs] = zoneWings(rooms.map(size), rng);
   }
-  return placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret });
+  return placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret, fit });
 }
 
 function zoneWings(sized, rng) {
@@ -196,13 +199,48 @@ function zoneWings(sized, rng) {
   return [east, west, dining && kitchen ? [[dining.ref, kitchen.ref]] : []];
 }
 
-function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret }) {
+function groundFit(g) {
+  const shell = new Set();
+  for (const r of [...g.rooms, ...g.hall, ...(g.stairs ? [g.stairs] : [])]) for (const q of roomRects(r)) for (let y = q.y; y < q.y + q.h; y++) for (let x = q.x; x < q.x + q.w; x++) shell.add(`${x},${y}`);
+  return { ext: g.ext, shell };
+}
+// fit: the ground floor's reach along the hall in each quarter (north/south x east/west). Upper floors and
+// cellars fill whichever quarter has the most of that outline left, so they stack over the ground floor.
+function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret, fit = null }) {
   const placed = [], doors = [];
-  const cur = { nE: stairs ? 1 : -1, nW: -1, sE: 1, sW: -1 };
+  const start = { nE: stairs ? 1 : -1, nW: -1, sE: 1, sW: -1 };
+  const cur = { ...start };
   const side = { N: 0, S: 0 };
+  const room = q => (fit ? Math.abs(fit.ext[q] - start[q]) : 0) - Math.abs(cur[q] - start[q]);
+  // squares of a block that would hang outside the ground floor's outline if put in quarter q
+  const overhang = (blk, q) => {
+    let c = cur[q], n = 0; const dir = q[1] === 'E' ? 1 : -1;
+    for (const r of blk) for (const p of r.parts) {
+      const x = dir > 0 ? c : c - p.w, y = q[0] === 'n' ? -p.d : HALL; c += dir * p.w;
+      for (const z of roomRects({ x, y, w: p.w, h: p.d, cut: p.cut ? { x, y, w: p.cut.w, h: p.cut.d } : null }))
+        for (let yy = z.y; yy < z.y + z.h; yy++) for (let xx = z.x; xx < z.x + z.w; xx++) if (!fit.shell.has(`${xx},${yy}`)) n++;
+    }
+    return n;
+  };
+  // a room nobody pinned may take whichever of its usual shapes sits best over the floor below
+  const variants = blk => (blk.length === 1 && !blk[0].shape && blk[0].parts.length === 1
+    ? [...new Set((MAP_DIMS[blk[0].sq] || []).map(d => d.join('x')))].map(k => { const [w, d] = k.split('x').map(Number); return [{ ...blk[0], w, d, parts: [{ w, d }] }]; })
+    : [blk]);
+  const choose = (blk, qs) => {
+    let bestC = null;
+    for (const q of qs) for (const v of [blk, ...variants(blk)]) {
+      const c = { q, v, o: overhang(v, q), r: room(q) };
+      if (!bestC || c.o < bestC.o || (c.o === bestC.o && c.r > bestC.r)) bestC = c;
+    }
+    return bestC;
+  };
   const put = (blocks, dir) => {
     for (const blk of blocks) {
       const s = side.N < side.S || (side.N === side.S && rng() < 0.5) ? 'N' : 'S';
+      place(blk, s, dir);
+    }
+  };
+  const place = (blk, s, dir) => {
       for (const r of blk) {
         const key = s === 'N' ? (dir > 0 ? 'nE' : 'nW') : (dir > 0 ? 'sE' : 'sW');
         const parts = r.parts || [{ w: r.w, d: r.d }];
@@ -221,10 +259,18 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret })
           doors.push({ x: dx, y: s === 'N' ? 0 : HALL, o: 'h', kind: secret.has(r.ref) ? 'secret' : r.zone === 'secure' ? 'locked' : 'door' });
         });
       }
-    }
   };
-  // reset side balance per wing so both wings fill north and south evenly
-  put(east, 1); side.N = side.S = 0; put(west, -1);
+  if (fit) {
+    // upper floor / cellar: ignore the wing split and give each block (widest first) to the emptiest quarter
+    const bw = blk => blk.reduce((t, r) => t + r.w, 0);
+    for (const blk of [...east, ...west].sort((a, c) => bw(c) - bw(a))) {
+      const c = choose(blk, ['nE', 'sE', 'nW', 'sW']);
+      place(c.v, c.q[0].toUpperCase(), c.q[1] === 'E' ? 1 : -1);
+    }
+  } else {
+    // reset side balance per wing so both wings fill north and south evenly
+    put(east, 1); side.N = side.S = 0; put(west, -1);
+  }
 
   for (const [ra, rc] of doorPairs) {
     const as = placed.filter(r => r.ref === ra), cs = placed.filter(r => r.ref === rc);
@@ -243,7 +289,7 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret })
     doors.push({ x: -1, y: HALL + fd, o: 'h', kind: 'front' }, { x: 0, y: HALL + fd, o: 'h', kind: 'front' });
   }
   const st = stairs ? { x: -1, y: -4, w: 2, h: 4, label: stairs } : null;
-  return { name, rooms: placed, hall, stairs: st, doors, front, plots: [] };
+  return { name, rooms: placed, hall, stairs: st, doors, front, plots: [], ext: { ...cur } };
 }
 
 function addYard(floor, outdoor, rng) {
@@ -305,8 +351,10 @@ function mapLabel(b, ref, fb) {
   return { full: `${fb} (removed)`, short: fb, space: '' };
 }
 
-function floorBox(f, walls) {
-  const rs = [...f.rooms, ...f.hall, ...f.plots, ...(f.stairs ? [f.stairs] : [])];
+// The ground floor's building (rooms, hall, stairwell): drawn faintly under the other storeys.
+function groundShell(L) { const g = L.fl[0]; return [...g.rooms.flatMap(roomRects), ...g.hall, ...(g.stairs ? [g.stairs] : [])]; }
+function floorBox(f, walls, under = []) {
+  const rs = [...f.rooms, ...f.hall, ...f.plots, ...(f.stairs ? [f.stairs] : []), ...under];
   let x0 = Math.min(...rs.map(r => r.x)), x1 = Math.max(...rs.map(r => r.x + r.w));
   let y0 = Math.min(...rs.map(r => r.y)), y1 = Math.max(...rs.map(r => r.y + r.h));
   if (f.front) y1 = Math.max(y1, f.front.y + (f.plots.length ? 0 : 2));
@@ -316,7 +364,7 @@ function floorBox(f, walls) {
 
 function renderMapSVG(b, L) {
   const hasWalls = (b.walls?.built || 0) > 0 || b.walls?.enclosed;
-  const panels = L.fl.map((f, i) => ({ f, box: floorBox(f, i === 0 && hasWalls) }));
+  const panels = L.fl.map((f, i) => ({ f, fi: i, box: floorBox(f, i === 0 && hasWalls, i ? groundShell(L) : []) }));
   if (L.demi.length) panels.push({ demi: true, box: { x0: -2, y0: -2, x1: 13, y1: 8 + (L.demi.length - 1) * 8 } });
   const PAD = 24, GAP = 36, TITLE = L.notes ? 86 : 64, PT = 26;
   let x = PAD; const maxH = Math.max(...panels.map(p => (p.box.y1 - p.box.y0) * MS));
@@ -361,6 +409,11 @@ function renderMapSVG(b, L) {
       continue;
     }
     const f = p.f;
+    if (p.fi) { // outline of the ground floor, so the storeys can be lined up
+      const shell = groundShell(L);
+      for (const r of shell) out.push(`<rect x="${X(r.x)}" y="${Y(r.y)}" width="${r.w * MS}" height="${r.h * MS}" fill="#d6dfeb"/>`);
+      out.push(`<path d="${wallPath({ hall: shell, rooms: [], doors: [] }, X, Y)}" stroke="${INK}" stroke-width="1.4" stroke-dasharray="5 4" fill="none" opacity=".6"/>`);
+    }
     // interiors
     for (const r of [...f.hall, ...f.rooms.flatMap(roomRects), ...(f.stairs ? [f.stairs] : [])]) out.push(`<rect x="${X(r.x)}" y="${Y(r.y)}" width="${r.w * MS}" height="${r.h * MS}" fill="#fff"/>`);
     for (const r of f.plots) out.push(`<rect x="${X(r.x)}" y="${Y(r.y)}" width="${r.w * MS}" height="${r.h * MS}" fill="#f6faf3"/>`);
@@ -432,7 +485,7 @@ function renderMapSVG(b, L) {
     const nk = (b.nooks || []).filter(x => x.parent === k.r.ref).map(x => `${x.label || x.kind} ${x.squares} sq`).join(', ');
     out.push(`<text x="${PAD + c * colW}" y="${keyY + 24 + r * 20}" font-size="13" fill="${INK}"><tspan font-weight="700">${k.n}.</tspan> ${e(lb.full)}${nk ? ` <tspan font-size="11">(${e(nk)})</tspan>` : ''}${lb.space ? ` <tspan opacity=".65" font-size="11">${lb.space}${L.fl.length > 1 || k.fl === 'Demiplane' ? ' · ' + e(k.fl) : ''}</tspan>` : ''}</text>`);
   });
-  out.push(`<text x="${PAD}" y="${height - 18}" font-size="11" fill="${INK}" opacity=".8">▭ door   ▬ locked door   S secret door   Cl/WC closet, washroom… (inside its room)   ┅ fenced outdoor area   ═ Bastion wall (dashed = not yet built)   ⋯ path to the gate</text>`);
+  out.push(`<text x="${PAD}" y="${height - 18}" font-size="11" fill="${INK}" opacity=".8">▭ door   ▬ locked door   S secret door   Cl/WC closet, washroom… (inside its room)   ┅ fenced outdoor area   ▒ ground floor's outline (other storeys)   ═ Bastion wall (dashed = not yet built)   ⋯ path to the gate</text>`);
   out.push('</svg>');
   return out.join('');
 }
@@ -518,7 +571,7 @@ function placeNooks(b, r) {
 function floorGeometry(b, L, fi) {
   const f = L.fl[fi];
   const hasWalls = fi === 0 && ((b.walls?.built || 0) > 0 || b.walls?.enclosed);
-  return { f, box: floorBox(f, hasWalls) };
+  return { f, box: floorBox(f, hasWalls, fi ? groundShell(L) : []) };
 }
 function renderControlPNG(b, L, fi, long = 1024) {
   const { f, box } = floorGeometry(b, L, fi);

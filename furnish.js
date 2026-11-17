@@ -661,7 +661,9 @@ function renderFurnished(b, L, fi, opts = {}) {
   const isCellar = /cellar|basement|under|crypt|vault/i.test(f.name) || (L.fl.length > 1 && fi > 0 && f.rooms.every(r => r.zone === 'secure'));
 
   // outside the building
-  paintFloor(g, s, 0, 0, W, H, ground ? 'grassPlot' : isCellar ? 'cellar' : 'roof', R);
+  // upper storeys: the yard far below, with the roof of the floor beneath around this storey's rooms
+  paintFloor(g, s, 0, 0, W, H, ground || (fi && !isCellar) ? 'grassPlot' : isCellar ? 'cellar' : 'roof', R);
+  if (fi && !isCellar) for (const r of groundShell(L)) paintFloor(g, s, X(r.x), Y(r.y), r.w * s, r.h * s, 'roof', R);
   // path from the front door to the gate
   if (f.front) {
     const yEnd = box.wall ? box.wall.y1 + 2 : f.front.y + 2;
