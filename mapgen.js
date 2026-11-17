@@ -450,3 +450,72 @@ function placeNooks(b, r) {
   }
   return out;
 }
+
+// ---------------- AI reskin helpers ----------------
+// Control image for the ControlNet: one floor, white lines on black, no text or grid.
+function floorGeometry(b, L, fi) {
+  const f = L.fl[fi];
+  const hasWalls = fi === 0 && ((b.walls?.built || 0) > 0 || b.walls?.enclosed);
+  return { f, box: floorBox(f, hasWalls) };
+}
+function renderControlPNG(b, L, fi, long = 1024) {
+  const { f, box } = floorGeometry(b, L, fi);
+  const bw = box.x1 - box.x0, bh = box.y1 - box.y0;
+  const s = long / Math.max(bw, bh);
+  const W = Math.round(bw * s / 8) * 8, H = Math.round(bh * s / 8) * 8;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+  const X = v => (v - box.x0) * s, Y = v => (v - box.y0) * s;
+  g.strokeStyle = '#fff'; g.lineCap = 'square'; g.lineJoin = 'miter';
+  const nooks = f.rooms.flatMap(r => placeNooks(b, r));
+  g.lineWidth = Math.max(3, s * 0.22);
+  g.stroke(new Path2D(wallPath(f, X, Y, nooks)));
+  g.lineWidth = Math.max(2, s * 0.12);
+  for (const r of f.plots) g.strokeRect(X(r.x), Y(r.y), r.w * s, r.h * s);
+  if (f.stairs) { const st = f.stairs; g.lineWidth = Math.max(1, s * 0.06); g.beginPath(); for (let i = 1; i < st.h * 3; i++) { g.moveTo(X(st.x), Y(st.y) + i * s / 3); g.lineTo(X(st.x + st.w), Y(st.y) + i * s / 3); } g.stroke(); }
+  if (box.wall) {
+    const w = box.wall; g.lineWidth = Math.max(4, s * 0.45); g.beginPath();
+    [[1, w.y1], [w.x1, w.y1], [w.x1, w.y0], [w.x0, w.y0], [w.x0, w.y1], [-1, w.y1]].forEach(([a, c2], i) => (i ? g.lineTo(X(a), Y(c2)) : g.moveTo(X(a), Y(c2))));
+    g.stroke();
+  }
+  return { dataUrl: c.toDataURL('image/png'), width: W, height: H, meta: { floor: fi, floorName: f.name, seed: L.seed, sig: L.sig, s, x0: box.x0, y0: box.y0 } };
+}
+
+// Paint the room numbers, title and a key back onto an AI-painted floor (AI text is unreadable, ours isn't).
+async function composeReskin(b, L, job, imgUrl) {
+  const img = await new Promise((res, rej) => { const i = new Image(); i.crossOrigin = 'anonymous'; i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load the painted map')); i.src = imgUrl; });
+  const m = job.meta || {}, k = img.width / job.width;
+  const f = L.fl[m.floor] || L.fl.find(x => x.name === m.floorName);
+  const items = f ? [...f.rooms, ...f.plots].sort((a, c) => a.n - c.n) : [];
+  const cols = Math.max(1, Math.floor(img.width / 300)), rowsN = Math.ceil(items.length / cols);
+  const headH = 58, keyH = items.length ? 24 + rowsN * 20 + 12 : 0;
+  const c = document.createElement('canvas'); c.width = img.width; c.height = img.height + headH + keyH;
+  const g = c.getContext('2d');
+  g.fillStyle = '#1b1712'; g.fillRect(0, 0, c.width, c.height);
+  g.drawImage(img, 0, headH);
+  g.fillStyle = '#f0c870'; g.font = '700 22px Georgia, serif'; g.fillText(b.name, 14, 30);
+  g.fillStyle = '#c4b496'; g.font = '13px Georgia, serif';
+  g.fillText(`${m.floorName || ''} · ${job.style === 'custom' ? 'custom style' : job.style} · 1 square = 5 ft`, 14, 48);
+  const same = m.seed === L.seed && m.sig === L.sig;
+  if (f && same) {
+    const S = m.s * k;
+    for (const r of items) {
+      const D = Math.max(0, ...placeNooks(b, r).map(q => q.h));
+      const fy = r.side === 'S' ? r.y : r.y + D, fh = r.h - D;
+      const cx = (r.x + r.w / 2 - m.x0) * S, cy = headH + (fy + fh / 2 - m.y0) * S;
+      const fs = Math.max(13, Math.min(26, S * 0.9));
+      g.font = `700 ${fs}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.lineWidth = 4; g.strokeStyle = 'rgba(0,0,0,.85)'; g.strokeText(String(r.n), cx, cy);
+      g.fillStyle = '#fff'; g.fillText(String(r.n), cx, cy);
+    }
+    g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+    g.fillStyle = '#f0c870'; g.font = '700 14px Georgia, serif'; g.fillText('KEY', 14, img.height + headH + 22);
+    g.font = '13px Georgia, serif'; g.fillStyle = '#efe4cf';
+    items.forEach((r, i) => { const col = Math.floor(i / rowsN), row = i % rowsN; g.fillText(`${r.n}. ${mapLabel(b, r.ref, r.fb).full}`.slice(0, 44), 14 + col * 300, img.height + headH + 44 + row * 20); });
+  } else if (f) {
+    g.fillStyle = '#e0a060'; g.font = '13px Georgia, serif';
+    g.fillText('The map was redrawn after this was painted, so room numbers are left off.', 14, img.height + headH + 22);
+  }
+  return new Promise((res, rej) => c.toBlob(bl => (bl ? res(bl) : rej(new Error('Could not build the image'))), 'image/png'));
+}
