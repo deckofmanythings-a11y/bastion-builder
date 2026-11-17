@@ -160,9 +160,10 @@ function planFloors(rooms, plan, rng) {
 }
 
 function buildFloor(name, rooms, rng, { foyer, stairs, wings = null, pairs = [], secret = new Set(), fit = null }) {
+  // a split facility becomes separate rooms, each placed on its own (they needn't be neighbours)
   const size = r => {
     const parts = roomDims(r, rng, MAP_DIMS);
-    return { ...r, parts, w: parts.reduce((t, p) => t + p.w, 0), d: Math.max(...parts.map(p => p.d)) };
+    return parts.map((p, i) => ({ ...r, parts: [p], w: p.w, d: p.d, ...(parts.length > 1 ? { split: { i, n: parts.length } } : {}) }));
   };
   let east, west, doorPairs;
   if (wings) {
@@ -170,13 +171,13 @@ function buildFloor(name, rooms, rng, { foyer, stairs, wings = null, pairs = [],
     const isPair = (a, c) => pairs.some(p => (p.a === a.ref && p.b === c.ref) || (p.a === c.ref && p.b === a.ref));
     const blocks = list => {
       const out = [];
-      for (const r of list.map(size)) { const last = out[out.length - 1]; if (last && last.length < 3 && isPair(last[last.length - 1], r)) last.push(r); else out.push([r]); }
+      for (const r of list.flatMap(size)) { const last = out[out.length - 1]; if (last && last.length < 3 && isPair(last[last.length - 1], r)) last.push(r); else out.push([r]); }
       return out;
     };
     east = blocks(wings.east); west = blocks(wings.west);
     doorPairs = pairs.filter(p => p.door).map(p => [p.a, p.b]);
   } else {
-    [east, west, doorPairs] = zoneWings(rooms.map(size), rng);
+    [east, west, doorPairs] = zoneWings(rooms.flatMap(size), rng);
   }
   return placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret, fit });
 }
@@ -249,7 +250,7 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret, f
           cur[key] += dir * p.w; side[s] += p.w;
           const y = s === 'N' ? -p.d : HALL;
           const rect = { ref: r.ref, fb: r.fb, zone: r.zone, x, y, w: p.w, h: p.d, side: s };
-          if (parts.length > 1) { rect.part = pi; rect.parts = parts.length; }
+          if (r.split) { rect.part = r.split.i; rect.parts = r.split.n; }
           if (p.cut) { // the cut corner is at the back; which end is fixed per facility so redraws agree
             const left = refHash(r.ref) & 1;
             rect.cut = { x: left ? x : x + p.w - p.cut.w, y: s === 'N' ? y : y + p.d - p.cut.d, w: p.cut.w, h: p.cut.d };
