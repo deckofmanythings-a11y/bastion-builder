@@ -38,7 +38,30 @@ function fit(w, h, long) { // keep aspect, long side = `long`, multiples of 8
   const s = long / Math.max(w, h);
   return [Math.max(256, Math.round(w * s / 8) * 8), Math.max(256, Math.round(h * s / 8) * 8)];
 }
+// Furnished base (meta.furnished): img2img over our own render. The furniture, doors and entrance are already
+// drawn, so the AI only restyles: partial denoise keeps every object where it is, and a canny ControlNet built
+// from the same picture holds the edges.
+const PAINT = { denoise: +env('PAINT_DENOISE', '0.55'), strength: +env('PAINT_CN', '0.6'), end: 0.9 };
+function paintWorkflow(job, image, seed) {
+  return {
+    1: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: MODELS.sdxl.ckpt } },
+    2: { class_type: 'CLIPTextEncode', inputs: { text: job.prompt, clip: ['1', 1] } },
+    3: { class_type: 'CLIPTextEncode', inputs: { text: job.negative, clip: ['1', 1] } },
+    4: { class_type: 'LoadImage', inputs: { image } },
+    5: { class_type: 'ControlNetLoader', inputs: { control_net_name: MODELS.sdxl.cn } },
+    11: { class_type: 'SetUnionControlNetType', inputs: { control_net: ['5', 0], type: MODELS.sdxl.union } },
+    12: { class_type: 'VAEEncode', inputs: { pixels: ['4', 0], vae: ['1', 2] } },
+    13: { class_type: 'Canny', inputs: { image: ['4', 0], low_threshold: 0.15, high_threshold: 0.45 } },
+    6: { class_type: 'ControlNetApplyAdvanced', inputs: { positive: ['2', 0], negative: ['3', 0], control_net: ['11', 0], image: ['13', 0],
+      strength: PAINT.strength, start_percent: 0, end_percent: PAINT.end, vae: ['1', 2] } },
+    8: { class_type: 'KSampler', inputs: { model: ['1', 0], positive: ['6', 0], negative: ['6', 1], latent_image: ['12', 0], seed,
+      steps: 8, cfg: 2.0, sampler_name: 'dpmpp_sde', scheduler: 'karras', denoise: PAINT.denoise } },
+    9: { class_type: 'VAEDecode', inputs: { samples: ['8', 0], vae: ['1', 2] } },
+    10: { class_type: 'SaveImage', inputs: { images: ['9', 0], filename_prefix: 'reskin' } },
+  };
+}
 function workflow(job, image, seed) {
+  if (job.meta?.furnished) return paintWorkflow(job, image, seed);
   const [W, H] = fit(job.width, job.height, M.long);
   const g = {
     1: { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: M.ckpt } },
@@ -63,7 +86,8 @@ async function runJob(job) {
   const ctrl = await fetch(job.control_url);
   if (!ctrl.ok) throw new Error(`control image ${ctrl.status}`);
   const form = new FormData();
-  form.append('image', new Blob([await ctrl.arrayBuffer()], { type: 'image/png' }), `ctrl-${job.id}.png`);
+  const jpg = /\.jpe?g$/i.test(job.control_url);
+  form.append('image', new Blob([await ctrl.arrayBuffer()], { type: jpg ? 'image/jpeg' : 'image/png' }), `ctrl-${job.id}.${jpg ? 'jpg' : 'png'}`);
   form.append('overwrite', 'true');
   const up = await (await fetch(`${COMFY}/upload/image`, { method: 'POST', body: form })).json();
   const seed = Math.floor(Math.random() * 2 ** 32);

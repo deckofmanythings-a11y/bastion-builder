@@ -485,37 +485,7 @@ function renderControlPNG(b, L, fi, long = 1024) {
 // Paint the room numbers, title and a key back onto an AI-painted floor (AI text is unreadable, ours isn't).
 async function composeReskin(b, L, job, imgUrl) {
   const img = await new Promise((res, rej) => { const i = new Image(); i.crossOrigin = 'anonymous'; i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load the painted map')); i.src = imgUrl; });
-  const m = job.meta || {}, k = img.width / job.width;
-  const f = L.fl[m.floor] || L.fl.find(x => x.name === m.floorName);
-  const items = f ? [...f.rooms, ...f.plots].sort((a, c) => a.n - c.n) : [];
-  const cols = Math.max(1, Math.floor(img.width / 300)), rowsN = Math.ceil(items.length / cols);
-  const headH = 58, keyH = items.length ? 24 + rowsN * 20 + 12 : 0;
-  const c = document.createElement('canvas'); c.width = img.width; c.height = img.height + headH + keyH;
-  const g = c.getContext('2d');
-  g.fillStyle = '#1b1712'; g.fillRect(0, 0, c.width, c.height);
-  g.drawImage(img, 0, headH);
-  g.fillStyle = '#f0c870'; g.font = '700 22px Georgia, serif'; g.fillText(b.name, 14, 30);
-  g.fillStyle = '#c4b496'; g.font = '13px Georgia, serif';
-  g.fillText(`${m.floorName || ''} · ${job.style === 'custom' ? 'custom style' : job.style} · 1 square = 5 ft`, 14, 48);
-  const same = m.seed === L.seed && m.sig === L.sig;
-  if (f && same) {
-    const S = m.s * k;
-    for (const r of items) {
-      const D = Math.max(0, ...placeNooks(b, r).map(q => q.h));
-      const fy = r.side === 'S' ? r.y : r.y + D, fh = r.h - D;
-      const cx = (r.x + r.w / 2 - m.x0) * S, cy = headH + (fy + fh / 2 - m.y0) * S;
-      const fs = Math.max(13, Math.min(26, S * 0.9));
-      g.font = `700 ${fs}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.lineWidth = 4; g.strokeStyle = 'rgba(0,0,0,.85)'; g.strokeText(String(r.n), cx, cy);
-      g.fillStyle = '#fff'; g.fillText(String(r.n), cx, cy);
-    }
-    g.textAlign = 'left'; g.textBaseline = 'alphabetic';
-    g.fillStyle = '#f0c870'; g.font = '700 14px Georgia, serif'; g.fillText('KEY', 14, img.height + headH + 22);
-    g.font = '13px Georgia, serif'; g.fillStyle = '#efe4cf';
-    items.forEach((r, i) => { const col = Math.floor(i / rowsN), row = i % rowsN; g.fillText(`${r.n}. ${mapLabel(b, r.ref, r.fb).full}`.slice(0, 44), 14 + col * 300, img.height + headH + 44 + row * 20); });
-  } else if (f) {
-    g.fillStyle = '#e0a060'; g.font = '13px Georgia, serif';
-    g.fillText('The map was redrawn after this was painted, so room numbers are left off.', 14, img.height + headH + 22);
-  }
-  return new Promise((res, rej) => c.toBlob(bl => (bl ? res(bl) : rej(new Error('Could not build the image'))), 'image/png'));
+  const m = job.meta || {};
+  const c = composeFloor(b, L, m, img, job.width, `${m.floorName || ''} · ${job.style === 'custom' ? 'custom style' : job.style} · 1 square = 5 ft`, true);
+  return canvasBlob(c);
 }

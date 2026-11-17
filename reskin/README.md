@@ -28,4 +28,12 @@ NVIDIA driver updates.
 
 ## Models
 - SD 1.5: `DreamShaper_8_pruned` + `control_v11p_sd15_lineart_fp16` (`RESKIN_MODEL=sd15`: faster but plainer)
-- SDXL (default): `dreamshaperXL_lightningDPMSDE` (copied from the desktop) + xinsir ControlNet Union promax, about 20 s per floor once loaded, about 110 s for the first job after a restart
+- SDXL (default): `dreamshaperXL_lightningDPMSDE` (copied from the desktop) + xinsir ControlNet Union promax.
+
+## Two modes
+- **Furnished (current)**: the browser sends the furnished battle map from furnish.js (JPEG). The worker repaints it at
+  denoise 0.55 with a canny ControlNet built from the same picture, so furniture, walls and the entrance stay put
+  (`PAINT_DENOISE`, `PAINT_CN` in .env to tune). About 2 minutes per floor: with the 9 GB cap the models can't all
+  stay in RAM. Without the ControlNet it was about 50 s, but walls drifted (the foyer became a room), so it stays on.
+- **Line art (older jobs)**: white walls on black, painted from scratch. Dropped as the default because the AI had no
+  idea what each room was: beds vanished and doors became decorations.

@@ -1,5 +1,6 @@
 // bb-reskin — AI map reskin queue.
-//   Browser:  {action:"enqueue", campaign, bastionId, floor, style, extra, control (base64 PNG), width, height, meta}
+//   Browser:  {action:"enqueue", campaign, bastionId, floor, style, extra, control (base64 PNG/JPEG), width, height, meta}
+//             meta.furnished = 1: control is the furnished battle map (furnish.js) and the worker restyles it (img2img)
 //   Worker (Foundry laptop, header x-worker-token): {action:"claim"} | {action:"complete", id, image, mime} |
 //             {action:"fail", id, error}
 // The browser sends a clean line drawing of one floor (white walls on black). The laptop's ComfyUI paints over
@@ -27,6 +28,7 @@ export const STYLES: Record<string, string> = {
   ruins: "ancient crumbling ruins, cracked flagstones, rubble, ivy, broken columns, sunlight",
 };
 const BASE = "top-down view, fantasy tabletop battle map, orthographic, highly detailed painted map, rooms and walls clearly visible";
+const FURNISHED = "furnished rooms, beds, tables, shelves, wooden doors, detailed props, rich textures, soft shadows, dramatic lighting";
 const NEG = "text, letters, numbers, watermark, signature, logo, grid lines, blurry, perspective, isometric, side view, people, characters, creatures, nsfw, nude";
 
 function originAllowed(o: string | null) {
@@ -119,15 +121,17 @@ Deno.serve(async (req) => {
   if (!(w >= 384 && w <= 1536 && hgt >= 384 && hgt <= 1536 && w % 8 === 0 && hgt % 8 === 0)) return json({ error: "bad_request", message: "bad size" }, 400, h);
   let ctrl: Uint8Array;
   try { ctrl = b64(String(x.control || "")); } catch { return json({ error: "bad_request", message: "bad control image" }, 400, h); }
-  if (ctrl.length < 200 || ctrl.length > 3_000_000 || ctrl[0] !== 0x89 || ctrl[1] !== 0x50) return json({ error: "bad_request", message: "control image must be a PNG" }, 400, h);
+  const isPng = ctrl[0] === 0x89 && ctrl[1] === 0x50, isJpg = ctrl[0] === 0xff && ctrl[1] === 0xd8;
+  if (ctrl.length < 200 || ctrl.length > 3_000_000 || !(isPng || isJpg)) return json({ error: "bad_request", message: "base image must be a PNG or JPEG" }, 400, h);
   const meta = x.meta && JSON.stringify(x.meta).length < 20000 ? x.meta : {};
 
   try {
     const rows = await rest(`bb_bastions?select=id&id=eq.${x.bastionId}&campaign=eq.${encodeURIComponent(x.campaign)}`);
     if (!rows.length) return json({ error: "unknown_bastion", message: "Save the Bastion first, then try again." }, 404, h);
-    const cpath = `reskins/${x.campaign}/${x.bastionId}/ctrl-${crypto.randomUUID()}.png`;
-    await upload(cpath, ctrl, "image/png");
-    const prompt = [BASE, style ? STYLES[style] : "", extra].filter(Boolean).join(", ");
+    const cpath = `reskins/${x.campaign}/${x.bastionId}/ctrl-${crypto.randomUUID()}.${isPng ? "png" : "jpg"}`;
+    await upload(cpath, ctrl, isPng ? "image/png" : "image/jpeg");
+    // furnished base (furnish.js): the picture already has the furniture, doors and entrance; the AI only restyles it
+    const prompt = [BASE, meta.furnished ? FURNISHED : "", style ? STYLES[style] : "", extra].filter(Boolean).join(", ");
     const r = await rpc("bb_reskin_enqueue", { p_campaign: x.campaign, p_bastion: x.bastionId, p_ip_hash: await ipHash(req),
       p_floor: String(x.floor || ""), p_style: style || "custom", p_prompt: prompt, p_meta: meta, p_width: w, p_height: hgt,
       p_control_path: cpath, p_ip_per_hour: IP_PER_HOUR, p_bastion_per_day: BASTION_PER_DAY, p_max_queued: MAX_QUEUED });
