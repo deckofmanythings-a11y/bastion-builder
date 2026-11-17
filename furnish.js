@@ -682,7 +682,7 @@ function renderFurnished(b, L, fi, opts = {}) {
   // hall runner
   const mainHall = f.hall[0];
   if (mainHall && mainHall.w >= 4) {
-    g.save(); g.globalAlpha = 0.9; drawItem(g, s, X, Y, { k: 'runner', x: mainHall.x + 0.6, y: mainHall.y + 0.55, w: mainHall.w - 1.2, h: 0.9, rot: 0 }, R); g.restore();
+    g.save(); g.globalAlpha = 0.9; drawItem(g, s, X, Y, { k: 'runner', x: mainHall.x + 0.6, y: mainHall.y + mainHall.h * 0.275, w: mainHall.w - 1.2, h: mainHall.h * 0.45, rot: 0 }, R); g.restore();
   }
   // stairs
   if (f.stairs) {

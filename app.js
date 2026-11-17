@@ -1187,18 +1187,19 @@ function nookFits(b, ref, squares, except) {
 function lineMapCard(b) {
   const lm = b.lineMap;
   const floorsSel = `<select data-map-floors title="How many storeys"><option value="auto" ${lm?.floors !== 'single' ? 'selected' : ''}>Floors: automatic</option><option value="single" ${lm?.floors === 'single' ? 'selected' : ''}>Floors: single storey</option></select>`;
+  const hallSel = `<select data-map-hall title="Width of the central hall"><option value="10">Hall: 10 ft wide</option><option value="5" ${+b.hallWidth === 5 ? 'selected' : ''}>Hall: 5 ft wide</option></select>`;
   if (!lm) return `
     <div class="section-head"><h2>Graph-Paper Map</h2></div>
     <div class="card linemap-empty">
       <p>Draw an old-school graph-paper floor plan of ${esc(b.name)} from its facilities. Every room opens onto the central hall, so nobody walks through the kitchen to get to bed. Public rooms sit by the entrance, the service wing on one side, and private rooms on the other. Big Bastions get an upper floor and a cellar.</p>
-      <div class="row">${floorsSel}<button class="btn" data-act="genMap">Draw map</button></div>
+      <div class="row">${floorsSel}${hallSel}<button class="btn" data-act="genMap">Draw map</button></div>
     </div>
     ${aiBox(b)}`;
   const stale = lm.sig !== mapSig(b);
   const problems = checkMap(lm.layout);
   return `
     <div class="section-head"><h2>Graph-Paper Map</h2>
-      <div class="row">${lm.plan ? '' : floorsSel}<button class="btn sm ghost" data-act="rerollMap" title="Shuffle room sizes and sides, keeping the same plan">New layout</button>
+      <div class="row">${lm.plan ? '' : floorsSel}${hallSel}<button class="btn sm ghost" data-act="rerollMap" title="Shuffle room sizes and sides, keeping the same plan">New layout</button>
       <button class="btn sm ghost" data-act="dlMapSvg">SVG</button><button class="btn sm ghost" data-act="dlMapPng">PNG</button>
       <button class="btn sm" data-act="saveMapPng" title="Add a PNG of this map to the uploaded maps">Save to Maps</button></div></div>
     ${stale ? `<div class="warnbar">This Bastion's facilities have changed since the map was drawn. <button class="btn xs" data-act="updateMap">Redraw map</button></div>` : ''}
@@ -1548,6 +1549,11 @@ document.addEventListener('change', (e) => {
   if (el.dataset.shapeRef) {
     const x = b.basics.find(y => y.id === el.dataset.shapeRef) || b.specials.find(y => y.id === el.dataset.shapeRef); if (!x) return;
     if (el.value) x.shape = el.value; else delete x.shape;
+    if (b.lineMap) drawLineMap(b, b.lineMap.seed, b.lineMap.floors);
+    commit(); return;
+  }
+  if (el.dataset.mapHall != null) {
+    if (el.value === '5') b.hallWidth = 5; else delete b.hallWidth;
     if (b.lineMap) drawLineMap(b, b.lineMap.seed, b.lineMap.floors);
     commit(); return;
   }

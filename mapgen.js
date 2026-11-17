@@ -2,7 +2,7 @@
 // Graph-paper Bastion map generator.
 //
 // Layout rules (deterministic for a given seed + room list):
-//  * One central hall (corridor, 10 ft wide) runs east–west. The front door opens from a foyer in the
+//  * One central hall (corridor, 10 ft wide, or 5 ft if the Bastion's hallWidth is 5) runs east–west. The front door opens from a foyer in the
 //    middle of its south side; a stairwell (multi-storey Bastions) sits opposite the foyer.
 //  * Every room has its own door onto the hall, so you never cross one room to reach another.
 //    Rooms are zoned: public rooms nearest the foyer, the service wing (kitchen, workshops, storage)
@@ -79,9 +79,13 @@ function mapRooms(b) {
   for (const f of b.specials) { const sq = SPACES[facSpace(f)].squares, zone = MAP_ZONE[f.key] || 'service'; out.push({ ref: f.id, zone, sq, fb: DEF[f.key].name, key: f.key, shape: zone === 'demi' ? '' : validShape(f.shape, sq, zone === 'outdoor') }); }
   return out;
 }
-function mapSig(b) { return mapRooms(b).map(r => `${r.ref}:${r.sq}${r.shape ? ':' + r.shape : ''}`).sort().join('|'); }
+function mapSig(b) { return mapRooms(b).map(r => `${r.ref}:${r.sq}${r.shape ? ':' + r.shape : ''}`).sort().join('|') + (hallSquares(b) === 1 ? '|hall5' : ''); }
 
+// Main hall depth in squares: 2 (10 ft, default) or 1 (5 ft), from b.hallWidth. Set per generateMap call.
+let HALL = 2;
+const hallSquares = b => (+b.hallWidth === 5 ? 1 : 2);
 function generateMap(b, { seed, floors = 'auto', plan = null }) {
+  HALL = hallSquares(b);
   const rng = mulberry32(seed >>> 0);
   const rooms = mapRooms(b);
   if (plan) return finishLayout(b, seed, floors, ...planFloors(rooms, plan, rng), plan);
@@ -205,7 +209,7 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret })
         parts.forEach((p, pi) => {
           const x = dir > 0 ? cur[key] : cur[key] - p.w;
           cur[key] += dir * p.w; side[s] += p.w;
-          const y = s === 'N' ? -p.d : 2;
+          const y = s === 'N' ? -p.d : HALL;
           const rect = { ref: r.ref, fb: r.fb, zone: r.zone, x, y, w: p.w, h: p.d, side: s };
           if (parts.length > 1) { rect.part = pi; rect.parts = parts.length; }
           if (p.cut) { // the cut corner is at the back; which end is fixed per facility so redraws agree
@@ -214,7 +218,7 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret })
           }
           placed.push(rect);
           const dx = x + Math.floor(rng() * p.w);
-          doors.push({ x: dx, y: s === 'N' ? 0 : 2, o: 'h', kind: secret.has(r.ref) ? 'secret' : r.zone === 'secure' ? 'locked' : 'door' });
+          doors.push({ x: dx, y: s === 'N' ? 0 : HALL, o: 'h', kind: secret.has(r.ref) ? 'secret' : r.zone === 'secure' ? 'locked' : 'door' });
         });
       }
     }
@@ -225,18 +229,18 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret })
   for (const [ra, rc] of doorPairs) {
     const as = placed.filter(r => r.ref === ra), cs = placed.filter(r => r.ref === rc);
     const hit = as.flatMap(a => cs.map(c => [a, c])).find(([a, c]) => a.side === c.side && (a.x + a.w === c.x || c.x + c.w === a.x));
-    if (hit) { const [a, c] = hit; doors.push({ x: Math.max(a.x, c.x), y: a.side === 'N' ? -1 : 2, o: 'v', kind: 'door' }); }
+    if (hit) { const [a, c] = hit; doors.push({ x: Math.max(a.x, c.x), y: a.side === 'N' ? -1 : HALL, o: 'v', kind: 'door' }); }
   }
   const xs = placed.flatMap(r => [r.x, r.x + r.w]).concat([-1, 1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
-  const hall = [{ x: minX, y: 0, w: maxX - minX, h: 2 }];
+  const hall = [{ x: minX, y: 0, w: maxX - minX, h: HALL }];
   let front = null;
   if (foyer) {
     const nb = placed.filter(r => r.side === 'S' && (r.x + r.w === -1 || r.x === 1));
     const fd = Math.max(2, ...nb.map(r => r.h));
-    hall.push({ x: -1, y: 2, w: 2, h: fd });
-    front = { y: 2 + fd };
-    doors.push({ x: -1, y: 2 + fd, o: 'h', kind: 'front' }, { x: 0, y: 2 + fd, o: 'h', kind: 'front' });
+    hall.push({ x: -1, y: HALL, w: 2, h: fd }); // the entrance foyer stays 10 ft wide for the double doors
+    front = { y: HALL + fd };
+    doors.push({ x: -1, y: HALL + fd, o: 'h', kind: 'front' }, { x: 0, y: HALL + fd, o: 'h', kind: 'front' });
   }
   const st = stairs ? { x: -1, y: -4, w: 2, h: 4, label: stairs } : null;
   return { name, rooms: placed, hall, stairs: st, doors, front, plots: [] };
