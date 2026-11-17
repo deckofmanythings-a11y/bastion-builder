@@ -68,7 +68,7 @@ function roomKindOf(b, ref) {
 // ---------------- placement ----------------
 function furnishRoom(b, r, f, seed, isPlot) {
   const kind = roomKindOf(b, r.ref);
-  const rng = mulberry32((seed ^ strHash(r.ref)) >>> 0);
+  const rng = mulberry32((seed ^ strHash(rkey(r))) >>> 0);
   const HW = r.w * 2, HH = r.h * 2;
   const occ = new Uint8Array(HW * HH); // 0 free, 1 blocked, 2 keep clear (walkway), 3 furniture
   const at = (i, j) => occ[j * HW + i];
@@ -76,6 +76,7 @@ function furnishRoom(b, r, f, seed, isPlot) {
   const cell = (ax, ay) => [Math.round((ax - r.x) * 2), Math.round((ay - r.y) * 2)]; // absolute squares -> half grid
   const back = isPlot ? 'N' : r.side === 'S' ? 'S' : 'N';
   const nooks = isPlot ? [] : placeNooks(b, r);
+  if (r.cut) { const [i, j] = cell(r.cut.x, r.cut.y); set(i, j, r.cut.w * 2, r.cut.h * 2, 1); } // an L room's missing corner
   for (const k of nooks) {
     const [i, j] = cell(k.x, k.y); set(i, j, k.w * 2, k.h * 2, 1);
     // keep the square in front of each nook door clear
@@ -181,6 +182,7 @@ function furnishRoom(b, r, f, seed, isPlot) {
   const nookItems = nooks.map(k => ({ k: NOOK_ITEM[k.n.kind] || 'crates', kind: k.n.kind, x: k.x, y: k.y, w: k.w, h: k.h, rot: back === 'N' ? 0 : 180, wet: WET_NOOK.has(k.n.kind) }));
   // label spot: the free 1x1 square nearest the middle
   let label = { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+  if (r.cut) { const q = roomRects(r).find(q => q.w === r.w); label = { x: q.x + q.w / 2, y: q.y + q.h / 2 }; }
   let best = Infinity;
   for (let j = 0; j + 2 <= HH; j++) for (let i = 0; i + 2 <= HW; i++) {
     let ok = true; for (let y = j; y < j + 2 && ok; y++) for (let x = i; x < i + 2; x++) if (occ[y * HW + x] === 1 || occ[y * HW + x] === 3) { ok = false; break; }
@@ -191,13 +193,15 @@ function furnishRoom(b, r, f, seed, isPlot) {
   return { kind, items, decals, nookItems, label };
 }
 
+// furnishing key for one drawn room (the rooms of a split facility are furnished separately)
+const rkey = r => (r.part ? `${r.ref}#${r.part}` : r.ref);
 const _furnCache = new Map();
 function furnishFloor(b, L, fi) {
   const f = L.fl[fi];
-  const key = JSON.stringify([L.seed, L.sig, fi, b.nooks || [], f.rooms.map(r => [r.ref, r.x, r.y, r.w, r.h]), f.plots.map(r => [r.ref, r.x, r.y, r.w, r.h])]);
+  const key = JSON.stringify([L.seed, L.sig, fi, b.nooks || [], f.rooms.map(r => [rkey(r), r.x, r.y, r.w, r.h, r.cut]), f.plots.map(r => [r.ref, r.x, r.y, r.w, r.h])]);
   if (_furnCache.has(key)) return _furnCache.get(key);
   const out = new Map();
-  for (const r of f.rooms) out.set(r.ref, furnishRoom(b, r, f, L.seed, false));
+  for (const r of f.rooms) out.set(rkey(r), furnishRoom(b, r, f, L.seed, false));
   for (const r of f.plots) out.set(r.ref, furnishRoom(b, r, f, L.seed, true));
   if (_furnCache.size > 40) _furnCache.clear();
   _furnCache.set(key, out);
@@ -671,8 +675,8 @@ function renderFurnished(b, L, fi, opts = {}) {
   // building floors
   for (const h of f.hall) paintFloor(g, s, X(h.x), Y(h.y), h.w * s, h.h * s, 'flags', R);
   for (const r of f.rooms) {
-    const fr = furn.get(r.ref);
-    paintFloor(g, s, X(r.x), Y(r.y), r.w * s, r.h * s, FLOOR_KEY[fr?.kind] || FLOOR_OF[r.zone] || 'wood', R, r.h > r.w);
+    const fr = furn.get(rkey(r));
+    for (const q of roomRects(r)) paintFloor(g, s, X(q.x), Y(q.y), q.w * s, q.h * s, FLOOR_KEY[fr?.kind] || FLOOR_OF[r.zone] || 'wood', R, r.h > r.w);
     for (const n of fr?.nookItems || []) paintFloor(g, s, X(n.x), Y(n.y), n.w * s, n.h * s, n.wet ? 'wet' : 'wood', R);
   }
   // hall runner
@@ -746,8 +750,8 @@ function renderFurnished(b, L, fi, opts = {}) {
 
 function drawLabels(g, b, L, fi, s, X, Y, furn, f) {
   for (const r of [...f.rooms, ...f.plots]) {
-    const fr = furn.get(r.ref), p = fr ? fr.label : { x: r.x + r.w / 2, y: r.y + r.h / 2 };
-    numberBadge(g, X(p.x), Y(p.y), r.n, Math.max(11, s * 0.42));
+    const fr = furn.get(rkey(r)), p = fr ? fr.label : { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+    numberBadge(g, X(p.x), Y(p.y), roomNo(r), Math.max(11, s * 0.42));
   }
   for (const d of f.doors) if (d.kind === 'secret') {
     const cx = d.o === 'h' ? X(d.x + 0.5) : X(d.x), cy = d.o === 'h' ? Y(d.y) : Y(d.y + 0.5);
@@ -763,7 +767,8 @@ function numberBadge(g, cx, cy, n, rad) {
   g.save();
   shadowOn(g, rad); g.beginPath(); g.arc(cx, cy, rad, 0, 7); g.fillStyle = 'rgba(25,20,15,.85)'; g.fill(); shadowOff(g);
   g.lineWidth = Math.max(1.5, rad * 0.14); g.strokeStyle = '#e0b860'; g.stroke();
-  g.font = `700 ${rad * 1.15}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#fff'; g.fillText(String(n), cx, cy + rad * 0.05);
+  const t = String(n); if (t.length > 2) rad *= 1.15;
+  g.font = `700 ${rad * (t.length > 2 ? 0.95 : 1.15)}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#fff'; g.fillText(String(n), cx, cy + rad * 0.05);
   g.restore();
 }
 
@@ -772,7 +777,8 @@ function numberBadge(g, cx, cy, n, rad) {
 function composeFloor(b, L, meta, img, imgW, subtitle, numbers) {
   const k = img.width / imgW;
   const f = L.fl[meta.floor] || L.fl.find(x => x.name === meta.floorName);
-  const items = f ? [...f.rooms, ...f.plots].sort((a, c) => a.n - c.n) : [];
+  const drawn = f ? [...f.rooms, ...f.plots] : [];
+  const items = drawn.filter((r, i) => drawn.findIndex(q => q.ref === r.ref) === i).sort((a, c) => a.n - c.n); // key: one line per facility
   const colW = 300, cols = Math.max(1, Math.floor(img.width / colW)), rowsN = Math.ceil(items.length / cols);
   const headH = 58, keyH = items.length ? 30 + rowsN * 20 + 12 : 0;
   const c = document.createElement('canvas'); c.width = img.width; c.height = img.height + headH + keyH;
@@ -791,9 +797,9 @@ function composeFloor(b, L, meta, img, imgW, subtitle, numbers) {
         for (const d of f.doors) if (d.kind !== 'secret') drawDoor(g, S, X, Y, d, thick);
         for (const r of f.rooms) for (const q of placeNooks(b, r)) drawDoor(g, S, X, Y, { ...q.door, kind: 'door' }, thick * 0.8);
       }
-      for (const r of items) {
-        const p = furn.get(r.ref)?.label || { x: r.x + r.w / 2, y: r.y + r.h / 2 };
-        numberBadge(g, (p.x - meta.x0) * S, headH + (p.y - meta.y0) * S, r.n, Math.max(11, Math.min(20, S * 0.42)));
+      for (const r of drawn) {
+        const p = furn.get(rkey(r))?.label || { x: r.x + r.w / 2, y: r.y + r.h / 2 };
+        numberBadge(g, (p.x - meta.x0) * S, headH + (p.y - meta.y0) * S, roomNo(r), Math.max(11, Math.min(20, S * 0.42)));
       }
     }
     g.textAlign = 'left'; g.textBaseline = 'alphabetic';

@@ -25,14 +25,42 @@ const MAP_ZONE = {
 // [width along the hall, depth away from it]; repeats weight the choice
 const MAP_DIMS = { 4: [[2, 2]], 16: [[4, 4], [4, 4], [4, 4], [8, 2], [2, 8]], 36: [[6, 6], [6, 6], [9, 4], [4, 9], [12, 3]] };
 const PLOT_DIMS = { 4: [[2, 2]], 16: [[4, 4], [4, 4], [8, 2]], 36: [[6, 6], [6, 6], [9, 4], [12, 3]] };
-// Shapes a player can pin on a facility ("WxD": width along the hall / path, depth away from it).
-const ROOM_SHAPES = { 4: ['2x2'], 16: ['4x4', '8x2', '2x8'], 36: ['6x6', '9x4', '4x9', '12x3', '3x12'] };
-const validShape = (shape, sq) => (shape && (ROOM_SHAPES[sq] || []).includes(shape) ? shape : '');
+// Shapes a player can pin on a facility. W is along the hall (or the path, for yard plots), D away from it.
+//   'WxD'          a rectangle
+//   'LWxD-wxd'     an L: a WxD room with a wxd corner cut out of the back (away from the hall)
+//   'AxB+CxD+...'  the facility's squares split into several rooms side by side, each with its own hall door
+const ROOM_SHAPES = {
+  4: ['2x2', 'L3x2-2x1', '1x2+1x2'],
+  16: ['4x4', '8x2', '2x8', 'L5x4-2x2', 'L4x5-2x2', 'L6x3-2x1', '2x4+2x4', '4x2+4x2', '4x3+2x2', '2x2+2x2+2x2+2x2'],
+  36: ['6x6', '9x4', '4x9', '12x3', '3x12', 'L7x6-3x2', 'L6x7-3x2', 'L9x5-3x3', '3x6+3x6', '6x3+6x3', '6x4+4x3', '4x4+4x4+2x2', '3x4+3x4+3x4', '3x3+3x3+3x3+3x3'],
+};
+const isRectShape = sh => /^\d+x\d+$/.test(sh);
+const shapeOptions = (sq, outdoor) => (ROOM_SHAPES[sq] || []).filter(sh => !outdoor || isRectShape(sh)); // yard plots stay rectangles
+const validShape = (shape, sq, outdoor) => (shape && shapeOptions(sq, outdoor).includes(shape) ? shape : '');
+// 'L5x4-2x2+2x2' -> [{w:5,d:4,cut:{w:2,d:2}}, {w:2,d:2}]
+function parseShape(sh) {
+  return sh.split('+').map(p => {
+    const m = /^(L?)(\d+)x(\d+)(?:-(\d+)x(\d+))?$/.exec(p);
+    return m[1] ? { w: +m[2], d: +m[3], cut: { w: +m[4], d: +m[5] } } : { w: +m[2], d: +m[3] };
+  });
+}
+const shapeSquares = sh => parseShape(sh).reduce((t, p) => t + p.w * p.d - (p.cut ? p.cut.w * p.cut.d : 0), 0);
+function refHash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
 // The random pick always consumes the rng, so pinning one room doesn't reshuffle the others.
 function roomDims(r, rng, table) {
   const rnd = pickR(rng, table[r.sq] || table[16]);
-  return r.shape ? r.shape.split('x').map(Number) : rnd;
+  return r.shape ? parseShape(r.shape) : [{ w: rnd[0], d: rnd[1] }];
 }
+// An L room's floor as rectangles (the cut corner left out); other rooms are one rectangle.
+function roomRects(r) {
+  if (!r.cut) return [r];
+  const c = r.cut, left = c.x === r.x, top = c.y === r.y;
+  const notchRow = { x: left ? r.x + c.w : r.x, w: r.w - c.w, h: c.h };
+  return top ? [{ ...notchRow, y: r.y }, { x: r.x, y: r.y + c.h, w: r.w, h: r.h - c.h }]
+    : [{ x: r.x, y: r.y, w: r.w, h: r.h - c.h }, { ...notchRow, y: r.y + r.h - c.h }];
+}
+// Room number as shown on the map: the rooms of a split facility are 5a, 5b, ...
+const roomNo = r => (r.parts > 1 ? `${r.n}${'abcdefgh'[r.part] || ''}` : String(r.n));
 
 function mulberry32(a) {
   return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
@@ -45,10 +73,10 @@ function mapRooms(b) {
   const out = [];
   for (const x of b.basics) {
     if (x.building?.action === 'add') continue;
-    const sq = SPACES[x.space].squares;
-    out.push({ ref: x.id, zone: MAP_ZONE[x.type] || 'service', sq, fb: x.type, basic: x.type, shape: validShape(x.shape, sq) });
+    const sq = SPACES[x.space].squares, zone = MAP_ZONE[x.type] || 'service';
+    out.push({ ref: x.id, zone, sq, fb: x.type, basic: x.type, shape: validShape(x.shape, sq, zone === 'outdoor') });
   }
-  for (const f of b.specials) { const sq = SPACES[facSpace(f)].squares; out.push({ ref: f.id, zone: MAP_ZONE[f.key] || 'service', sq, fb: DEF[f.key].name, key: f.key, shape: validShape(f.shape, sq) }); }
+  for (const f of b.specials) { const sq = SPACES[facSpace(f)].squares, zone = MAP_ZONE[f.key] || 'service'; out.push({ ref: f.id, zone, sq, fb: DEF[f.key].name, key: f.key, shape: zone === 'demi' ? '' : validShape(f.shape, sq, zone === 'outdoor') }); }
   return out;
 }
 function mapSig(b) { return mapRooms(b).map(r => `${r.ref}:${r.sq}${r.shape ? ':' + r.shape : ''}`).sort().join('|'); }
@@ -79,7 +107,15 @@ function finishLayout(b, seed, floors, fl, demiRooms, plan) {
   const demi = demiRooms.map(r => ({ ref: r.ref, fb: r.fb, x: 0, y: 0, w: 6, h: 6 }));
   // number rooms: floor by floor, west to east, north to south
   let n = 1;
-  for (const f of fl) { f.rooms.sort((a, c) => a.x - c.x || a.y - c.y).forEach(r => { r.n = n++; }); f.plots.sort((a, c) => a.x - c.x || a.y - c.y).forEach(r => { r.n = n++; }); }
+  const nums = new Map(); // the rooms of a split facility share its number
+  for (const f of fl) {
+    const partN = new Map(); // letters run west to east
+    f.rooms.sort((a, c) => a.x - c.x || a.y - c.y).forEach(r => {
+      if (!nums.has(r.ref)) nums.set(r.ref, n++); r.n = nums.get(r.ref);
+      if (r.parts > 1) { r.part = partN.get(r.ref) || 0; partN.set(r.ref, r.part + 1); }
+    });
+    f.plots.sort((a, c) => a.x - c.x || a.y - c.y).forEach(r => { r.n = n++; });
+  }
   demi.forEach(r => { r.n = n++; });
   return { v: 1, seed: seed >>> 0, floors, sig: mapSig(b), fl, demi, notes: (plan && plan.notes) || '' };
 }
@@ -117,7 +153,10 @@ function planFloors(rooms, plan, rng) {
 }
 
 function buildFloor(name, rooms, rng, { foyer, stairs, wings = null, pairs = [], secret = new Set() }) {
-  const size = r => { const [w, d] = roomDims(r, rng, MAP_DIMS); return { ...r, w, d }; };
+  const size = r => {
+    const parts = roomDims(r, rng, MAP_DIMS);
+    return { ...r, parts, w: parts.reduce((t, p) => t + p.w, 0), d: Math.max(...parts.map(p => p.d)) };
+  };
   let east, west, doorPairs;
   if (wings) {
     // AI plan: wing order as given; a pair listed consecutively becomes one block (kept side by side)
@@ -162,13 +201,21 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret })
       const s = side.N < side.S || (side.N === side.S && rng() < 0.5) ? 'N' : 'S';
       for (const r of blk) {
         const key = s === 'N' ? (dir > 0 ? 'nE' : 'nW') : (dir > 0 ? 'sE' : 'sW');
-        const x = dir > 0 ? cur[key] : cur[key] - r.w;
-        cur[key] += dir * r.w; side[s] += r.w;
-        const y = s === 'N' ? -r.d : 2;
-        const rect = { ref: r.ref, fb: r.fb, zone: r.zone, x, y, w: r.w, h: r.d, side: s };
-        placed.push(rect);
-        const dx = x + Math.floor(rng() * r.w);
-        doors.push({ x: dx, y: s === 'N' ? 0 : 2, o: 'h', kind: secret.has(r.ref) ? 'secret' : r.zone === 'secure' ? 'locked' : 'door' });
+        const parts = r.parts || [{ w: r.w, d: r.d }];
+        parts.forEach((p, pi) => {
+          const x = dir > 0 ? cur[key] : cur[key] - p.w;
+          cur[key] += dir * p.w; side[s] += p.w;
+          const y = s === 'N' ? -p.d : 2;
+          const rect = { ref: r.ref, fb: r.fb, zone: r.zone, x, y, w: p.w, h: p.d, side: s };
+          if (parts.length > 1) { rect.part = pi; rect.parts = parts.length; }
+          if (p.cut) { // the cut corner is at the back; which end is fixed per facility so redraws agree
+            const left = refHash(r.ref) & 1;
+            rect.cut = { x: left ? x : x + p.w - p.cut.w, y: s === 'N' ? y : y + p.d - p.cut.d, w: p.cut.w, h: p.cut.d };
+          }
+          placed.push(rect);
+          const dx = x + Math.floor(rng() * p.w);
+          doors.push({ x: dx, y: s === 'N' ? 0 : 2, o: 'h', kind: secret.has(r.ref) ? 'secret' : r.zone === 'secure' ? 'locked' : 'door' });
+        });
       }
     }
   };
@@ -176,10 +223,9 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret })
   put(east, 1); side.N = side.S = 0; put(west, -1);
 
   for (const [ra, rc] of doorPairs) {
-    const a = placed.find(r => r.ref === ra), c = placed.find(r => r.ref === rc);
-    if (a && c && a.side === c.side && (a.x + a.w === c.x || c.x + c.w === a.x)) {
-      doors.push({ x: Math.max(a.x, c.x), y: a.side === 'N' ? -1 : 2, o: 'v', kind: 'door' });
-    }
+    const as = placed.filter(r => r.ref === ra), cs = placed.filter(r => r.ref === rc);
+    const hit = as.flatMap(a => cs.map(c => [a, c])).find(([a, c]) => a.side === c.side && (a.x + a.w === c.x || c.x + c.w === a.x));
+    if (hit) { const [a, c] = hit; doors.push({ x: Math.max(a.x, c.x), y: a.side === 'N' ? -1 : 2, o: 'v', kind: 'door' }); }
   }
   const xs = placed.flatMap(r => [r.x, r.x + r.w]).concat([-1, 1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
@@ -204,7 +250,7 @@ function addYard(floor, outdoor, rng) {
   const y0 = facade + 2;
   const sides = { W: { x: -2, y: y0, row: 0, lim: Math.min(-8, bx0) }, E: { x: 2, y: y0, row: 0, lim: Math.max(8, bx1) } };
   const used = { W: 0, E: 0 };
-  const list = outdoor.map(r => { const [w, h] = roomDims(r, rng, PLOT_DIMS); return { ...r, w, h }; }).sort((a, c) => c.w * c.h - a.w * a.h);
+  const list = outdoor.map(r => { const [{ w, d: h }] = roomDims(r, rng, PLOT_DIMS); return { ...r, w, h }; }).sort((a, c) => c.w * c.h - a.w * a.h);
   for (const r of list) {
     const k = used.W < used.E || (used.W === used.E && rng() < 0.5) ? 'W' : 'E';
     const s = sides[k];
@@ -242,7 +288,7 @@ function checkMap(layout) {
   }
   return problems;
 }
-function fillCells(m, r, id) { for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) m.set(`${x},${y}`, id); }
+function fillCells(m, r, id) { for (const q of roomRects(r)) for (let y = q.y; y < q.y + q.h; y++) for (let x = q.x; x < q.x + q.w; x++) m.set(`${x},${y}`, id); }
 
 // ---------------- rendering ----------------
 const MS = 16; // px per square
@@ -279,7 +325,7 @@ function renderMapSVG(b, L) {
   const width = Math.max(x - GAP + PAD, 560);
   // key entries
   const keyItems = [];
-  for (const f of L.fl) for (const r of [...f.rooms, ...f.plots]) keyItems.push({ n: r.n, r, fl: f.name });
+  for (const f of L.fl) for (const r of [...f.rooms, ...f.plots]) if (!keyItems.some(k => k.r.ref === r.ref)) keyItems.push({ n: r.n, r, fl: f.name });
   L.demi.forEach(r => keyItems.push({ n: r.n, r, fl: 'Demiplane' }));
   keyItems.sort((a, c) => a.n - c.n);
   const keyLen = k => { const lb = mapLabel(b, k.r.ref, k.r.fb); const nk = (b.nooks || []).filter(x => x.parent === k.r.ref).map(x => `${x.label || x.kind} ${x.squares} sq`).join(', ');
@@ -312,7 +358,7 @@ function renderMapSVG(b, L) {
     }
     const f = p.f;
     // interiors
-    for (const r of [...f.hall, ...f.rooms, ...(f.stairs ? [f.stairs] : [])]) out.push(`<rect x="${X(r.x)}" y="${Y(r.y)}" width="${r.w * MS}" height="${r.h * MS}" fill="#fff"/>`);
+    for (const r of [...f.hall, ...f.rooms.flatMap(roomRects), ...(f.stairs ? [f.stairs] : [])]) out.push(`<rect x="${X(r.x)}" y="${Y(r.y)}" width="${r.w * MS}" height="${r.h * MS}" fill="#fff"/>`);
     for (const r of f.plots) out.push(`<rect x="${X(r.x)}" y="${Y(r.y)}" width="${r.w * MS}" height="${r.h * MS}" fill="#f6faf3"/>`);
     grid(out, p, X, Y);
     // path from the front door to the gate
@@ -351,6 +397,7 @@ function renderMapSVG(b, L) {
     for (const r of f.plots) roomText(out, b, r, X(r.x + r.w / 2), Y(r.y + r.h / 2), r.w, r.h, e);
     for (const r of f.rooms) {
       const D = Math.max(0, ...nooks.filter(k => k.n.parent === r.ref).map(k => k.h));
+      if (r.cut) { const q = roomRects(r).find(q => q.w === r.w); roomText(out, b, r, X(q.x + q.w / 2), Y(q.y + q.h / 2), q.w, q.h, e); continue; }
       const fy = r.side === 'S' ? r.y : r.y + D, fh = r.h - D;
       roomText(out, b, r, X(r.x + r.w / 2), Y(fy + fh / 2), r.w, fh, e);
     }
@@ -395,8 +442,8 @@ function grid(out, p, X, Y) {
 
 function roomText(out, b, r, cx, cy, w, h, e) {
   const lb = mapLabel(b, r.ref, r.fb);
-  const name = lb.short.length * MS * 0.34 <= w * MS - 6 && h >= 2 && w >= 3 ? lb.short : null;
-  out.push(`<text x="${cx}" y="${cy + (name ? -1 : 5)}" font-size="${MS * 0.95}" font-weight="700" text-anchor="middle" fill="${INK}" stroke="#fff" stroke-width="3" paint-order="stroke">${r.n}</text>`);
+  const name = lb.short.length * MS * 0.34 <= w * MS - 6 && h >= 2 && w >= 3 && !r.part ? lb.short : null;
+  out.push(`<text x="${cx}" y="${cy + (name ? -1 : 5)}" font-size="${MS * 0.95}" font-weight="700" text-anchor="middle" fill="${INK}" stroke="#fff" stroke-width="3" paint-order="stroke">${roomNo(r)}</text>`);
   if (name) out.push(`<text x="${cx}" y="${cy + 13}" font-size="${MS * 0.6}" text-anchor="middle" fill="${INK}" stroke="#fff" stroke-width="3" paint-order="stroke">${e(name)}</text>`);
 }
 
@@ -446,13 +493,15 @@ function svgToPngBlob(svg, scale = 2) {
 // They share one back strip just deep enough to hold them all; each opens into its own room.
 function placeNooks(b, r) {
   const list = (b.nooks || []).filter(n => n.parent === r.ref);
-  if (!list.length || r.h < 2) return [];
+  if (!list.length || r.h < 2 || r.part) return []; // a split facility keeps its nooks in its first room
+  // an L room's back wall is shorter (the cut corner), so its nooks start beside the cut
+  const bx0 = r.cut && r.cut.x === r.x ? r.x + r.cut.w : r.x, bx1 = r.cut && r.cut.x !== r.x ? r.cut.x : r.x + r.w, bw = bx1 - bx0;
   const total = list.reduce((t, n) => t + Math.max(1, +n.squares || 1), 0);
-  const D = Math.min(r.h - 1, Math.max(1, Math.ceil(total / r.w)));
-  const out = []; let cx = r.x;
+  const D = Math.min(r.h - 1, Math.max(1, Math.ceil(total / bw)));
+  const out = []; let cx = bx0;
   for (const n of list) {
     const s = Math.max(1, +n.squares || 1), h = Math.min(D, s), w = Math.ceil(s / h);
-    if (cx + w > r.x + r.w) break; // no room left along the back wall; it still appears in the key
+    if (cx + w > bx1) break; // no room left along the back wall; it still appears in the key
     const y = r.side === 'S' ? r.y + r.h - h : r.y;
     out.push({ n, x: cx, y, w, h, door: { x: cx + Math.floor((w - 1) / 2), y: r.side === 'S' ? y : y + h, o: 'h' } });
     cx += w;

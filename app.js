@@ -1145,21 +1145,34 @@ function nooksCard(b) {
 }
 // ----- pinned room shapes for the graph-paper map (otherwise each redraw picks one at random) -----
 function shapeLabel(sh) {
-  const [w, d] = sh.split('x').map(Number);
-  const ft = `${w * 5}×${d * 5} ft`;
-  return w === d ? `${w}×${d} square (${ft})` : w > d ? `${w}×${d} wide, along the hall (${ft})` : `${w}×${d} deep, back from the hall (${ft})`;
+  const ft = (w, d) => `${w * 5}×${d * 5} ft`;
+  const parts = parseShape(sh);
+  if (parts.length > 1) {
+    const same = parts.every(p => p.w === parts[0].w && p.d === parts[0].d);
+    return same ? `${parts.length} rooms, ${ft(parts[0].w, parts[0].d)} each` : `${parts.length} rooms: ${parts.map(p => ft(p.w, p.d)).join(' + ')}`;
+  }
+  const { w, d, cut } = parts[0];
+  if (cut) return `L-shape, ${ft(w, d)} minus a ${ft(cut.w, cut.d)} corner`;
+  return w === d ? `Square, ${ft(w, d)}` : w > d ? `Wide, ${ft(w, d)} along the hall` : `Deep, ${ft(w, d)} back from the hall`;
 }
 function shapesCard(b) {
-  const rows = nookParents(b).filter(p => (ROOM_SHAPES[p.sq] || []).length > 1 && b.specials.find(f => f.id === p.ref)?.key !== 'demiplane');
+  const zone = new Map(mapRooms(b).map(r => [r.ref, r.zone]));
+  const rows = nookParents(b).filter(p => zone.has(p.ref) && zone.get(p.ref) !== 'demi' && shapeOptions(p.sq, zone.get(p.ref) === 'outdoor').length > 1);
   if (!rows.length) return '';
   const fac = ref => b.basics.find(x => x.id === ref) || b.specials.find(x => x.id === ref);
+  const groups = [['Rectangle', sh => isRectShape(sh)], ['L-shape', sh => sh[0] === 'L'], ['Split into separate rooms', sh => sh.includes('+')]];
+  const sel = (p, out) => {
+    const cur = validShape(fac(p.ref)?.shape, p.sq, out), opts = shapeOptions(p.sq, out);
+    const o = sh => `<option value="${sh}" ${sh === cur ? 'selected' : ''}>${shapeLabel(sh)}</option>`;
+    return `<select data-shape-ref="${p.ref}"><option value="">Any shape (random)</option>${groups.map(([g, t]) => { const l = opts.filter(t); return l.length ? `<optgroup label="${g}">${l.map(o).join('')}</optgroup>` : ''; }).join('')}</select>`;
+  };
   return `
     <div class="section-head"><h2>Room Shapes</h2></div>
-    <p class="hint">Pick a shape for any room you want to stay the same on the graph-paper map, however many times it's redrawn. Rooms left on "Any shape" get a random one each time. Squares are 5 ft; the first number runs along the hall (or the path, for yard plots).</p>
+    <p class="hint">Pick a shape for any facility you want to stay the same on the graph-paper map, however many times it's redrawn; "Any shape" gets a random rectangle each time. The area never changes: an L-shape or a split uses exactly the facility's squares. A split facility becomes several rooms side by side (numbered 5a, 5b…), each with its own door to the hall, and its closets go in the first one. Yard plots can only be rectangles.</p>
     <div class="card nooks">
-      ${rows.map(p => { const cur = validShape(fac(p.ref)?.shape, p.sq); return `
+      ${rows.map(p => `
         <div class="nookrow"><span class="shape-name">${esc(p.name)} <span class="small muted">${p.space}, ${p.sq} sq</span></span>
-          <select data-shape-ref="${p.ref}"><option value="">Any shape</option>${ROOM_SHAPES[p.sq].map(sh => `<option value="${sh}" ${sh === cur ? 'selected' : ''}>${shapeLabel(sh)}</option>`).join('')}</select></div>`; }).join('')}
+          ${sel(p, zone.get(p.ref) === 'outdoor')}</div>`).join('')}
     </div>`;
 }
 function nookFits(b, ref, squares, except) {
