@@ -301,6 +301,7 @@ dialog h4 { margin: 1rem 0 .4rem; color: var(--gold); }
 .nookrow { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
 .nookrow input[type=number] { width: 4.2em; }
 .nookrow input:not([type]) { width: 11em; }
+.shape-name { min-width: 14em; flex: 1; }
 .nookrow.add { border-top: 1px dashed var(--line); padding-top: .5rem; }
 
 /* ----- AI reskin ----- */

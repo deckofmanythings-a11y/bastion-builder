@@ -25,6 +25,14 @@ const MAP_ZONE = {
 // [width along the hall, depth away from it]; repeats weight the choice
 const MAP_DIMS = { 4: [[2, 2]], 16: [[4, 4], [4, 4], [4, 4], [8, 2], [2, 8]], 36: [[6, 6], [6, 6], [9, 4], [4, 9], [12, 3]] };
 const PLOT_DIMS = { 4: [[2, 2]], 16: [[4, 4], [4, 4], [8, 2]], 36: [[6, 6], [6, 6], [9, 4], [12, 3]] };
+// Shapes a player can pin on a facility ("WxD": width along the hall / path, depth away from it).
+const ROOM_SHAPES = { 4: ['2x2'], 16: ['4x4', '8x2', '2x8'], 36: ['6x6', '9x4', '4x9', '12x3', '3x12'] };
+const validShape = (shape, sq) => (shape && (ROOM_SHAPES[sq] || []).includes(shape) ? shape : '');
+// The random pick always consumes the rng, so pinning one room doesn't reshuffle the others.
+function roomDims(r, rng, table) {
+  const rnd = pickR(rng, table[r.sq] || table[16]);
+  return r.shape ? r.shape.split('x').map(Number) : rnd;
+}
 
 function mulberry32(a) {
   return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
@@ -37,12 +45,13 @@ function mapRooms(b) {
   const out = [];
   for (const x of b.basics) {
     if (x.building?.action === 'add') continue;
-    out.push({ ref: x.id, zone: MAP_ZONE[x.type] || 'service', sq: SPACES[x.space].squares, fb: x.type, basic: x.type });
+    const sq = SPACES[x.space].squares;
+    out.push({ ref: x.id, zone: MAP_ZONE[x.type] || 'service', sq, fb: x.type, basic: x.type, shape: validShape(x.shape, sq) });
   }
-  for (const f of b.specials) out.push({ ref: f.id, zone: MAP_ZONE[f.key] || 'service', sq: SPACES[facSpace(f)].squares, fb: DEF[f.key].name, key: f.key });
+  for (const f of b.specials) { const sq = SPACES[facSpace(f)].squares; out.push({ ref: f.id, zone: MAP_ZONE[f.key] || 'service', sq, fb: DEF[f.key].name, key: f.key, shape: validShape(f.shape, sq) }); }
   return out;
 }
-function mapSig(b) { return mapRooms(b).map(r => `${r.ref}:${r.sq}`).sort().join('|'); }
+function mapSig(b) { return mapRooms(b).map(r => `${r.ref}:${r.sq}${r.shape ? ':' + r.shape : ''}`).sort().join('|'); }
 
 function generateMap(b, { seed, floors = 'auto', plan = null }) {
   const rng = mulberry32(seed >>> 0);
@@ -108,7 +117,7 @@ function planFloors(rooms, plan, rng) {
 }
 
 function buildFloor(name, rooms, rng, { foyer, stairs, wings = null, pairs = [], secret = new Set() }) {
-  const size = r => { const [w, d] = pickR(rng, MAP_DIMS[r.sq] || MAP_DIMS[16]); return { ...r, w, d }; };
+  const size = r => { const [w, d] = roomDims(r, rng, MAP_DIMS); return { ...r, w, d }; };
   let east, west, doorPairs;
   if (wings) {
     // AI plan: wing order as given; a pair listed consecutively becomes one block (kept side by side)
@@ -195,7 +204,7 @@ function addYard(floor, outdoor, rng) {
   const y0 = facade + 2;
   const sides = { W: { x: -2, y: y0, row: 0, lim: Math.min(-8, bx0) }, E: { x: 2, y: y0, row: 0, lim: Math.max(8, bx1) } };
   const used = { W: 0, E: 0 };
-  const list = outdoor.map(r => { const [w, h] = pickR(rng, PLOT_DIMS[r.sq] || PLOT_DIMS[16]); return { ...r, w, h }; }).sort((a, c) => c.w * c.h - a.w * a.h);
+  const list = outdoor.map(r => { const [w, h] = roomDims(r, rng, PLOT_DIMS); return { ...r, w, h }; }).sort((a, c) => c.w * c.h - a.w * a.h);
   for (const r of list) {
     const k = used.W < used.E || (used.W === used.E && rng() < 0.5) ? 'W' : 'E';
     const s = sides[k];

@@ -723,6 +723,7 @@ function facilitiesView(b) {
     </div>
 
     ${nooksCard(b)}
+    ${shapesCard(b)}
 
     <div class="section-head"><h2>Defensive Walls</h2></div>
     <div class="card walls">
@@ -1142,6 +1143,25 @@ function nooksCard(b) {
       </div>` : ''}
     </div>`;
 }
+// ----- pinned room shapes for the graph-paper map (otherwise each redraw picks one at random) -----
+function shapeLabel(sh) {
+  const [w, d] = sh.split('x').map(Number);
+  const ft = `${w * 5}×${d * 5} ft`;
+  return w === d ? `${w}×${d} square (${ft})` : w > d ? `${w}×${d} wide, along the hall (${ft})` : `${w}×${d} deep, back from the hall (${ft})`;
+}
+function shapesCard(b) {
+  const rows = nookParents(b).filter(p => (ROOM_SHAPES[p.sq] || []).length > 1 && b.specials.find(f => f.id === p.ref)?.key !== 'demiplane');
+  if (!rows.length) return '';
+  const fac = ref => b.basics.find(x => x.id === ref) || b.specials.find(x => x.id === ref);
+  return `
+    <div class="section-head"><h2>Room Shapes</h2></div>
+    <p class="hint">Pick a shape for any room you want to stay the same on the graph-paper map, however many times it's redrawn. Rooms left on "Any shape" get a random one each time. Squares are 5 ft; the first number runs along the hall (or the path, for yard plots).</p>
+    <div class="card nooks">
+      ${rows.map(p => { const cur = validShape(fac(p.ref)?.shape, p.sq); return `
+        <div class="nookrow"><span class="shape-name">${esc(p.name)} <span class="small muted">${p.space}, ${p.sq} sq</span></span>
+          <select data-shape-ref="${p.ref}"><option value="">Any shape</option>${ROOM_SHAPES[p.sq].map(sh => `<option value="${sh}" ${sh === cur ? 'selected' : ''}>${shapeLabel(sh)}</option>`).join('')}</select></div>`; }).join('')}
+    </div>`;
+}
 function nookFits(b, ref, squares, except) {
   const p = nookParents(b).find(x => x.ref === ref);
   if (!p) return 'Pick a facility.';
@@ -1510,6 +1530,12 @@ document.addEventListener('change', (e) => {
       const why = nookFits(b, parent, sq, n.id); if (why) { toast(why); render(); return; }
       n.squares = sq; n.parent = parent;
     } else n[k] = el.value.slice(0, 40);
+    commit(); return;
+  }
+  if (el.dataset.shapeRef) {
+    const x = b.basics.find(y => y.id === el.dataset.shapeRef) || b.specials.find(y => y.id === el.dataset.shapeRef); if (!x) return;
+    if (el.value) x.shape = el.value; else delete x.shape;
+    if (b.lineMap) drawLineMap(b, b.lineMap.seed, b.lineMap.floors);
     commit(); return;
   }
   if (el.dataset.mapFloors != null) { if (b.lineMap) { drawLineMap(b, b.lineMap.seed, el.value); commit(); } return; }
