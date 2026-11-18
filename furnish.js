@@ -687,15 +687,7 @@ function renderFurnished(b, L, fi, opts = {}) {
     g.save(); g.globalAlpha = 0.9; drawItem(g, s, X, Y, { k: 'runner', x: mainHall.x + 0.6, y: mainHall.y + mainHall.h * 0.275, w: mainHall.w - 1.2, h: mainHall.h * 0.45, rot: 0 }, R); g.restore();
   }
   // stairs
-  if (f.stairs) {
-    const st = f.stairs, n = st.h * 3;
-    for (let i = 0; i < n; i++) {
-      const t = i / n, up = /UP/.test(st.label) && !/DN/.test(st.label);
-      g.fillStyle = shade('#9a948c', up ? -0.35 * (1 - t) : -0.45 * t);
-      g.fillRect(X(st.x), Y(st.y) + i * s / 3, st.w * s, s / 3);
-      g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(X(st.x), Y(st.y) + (i + 1) * s / 3 - 1, st.w * s, Math.max(1, s * 0.03));
-    }
-  }
+  if (f.stairs) drawStairs(g, s, X, Y, f.stairs);
   // decals, then furniture
   for (const fr of furn.values()) for (const d of fr.decals) drawItem(g, s, X, Y, d, R);
   for (const fr of furn.values()) {
@@ -750,6 +742,38 @@ function renderFurnished(b, L, fi, opts = {}) {
   return { canvas: c, width: W, height: H, meta: { floor: fi, floorName: f.name, seed: L.seed, sig: L.sig, s, x0: box.x0, y0: box.y0, furnished: 1 } };
 }
 
+// Stone stairs: each flight shaded step by step (lighter climbing up, darker going down), flat landings,
+// wooden rails, and for a spiral a round well with a central post.
+function drawStairs(g, s, X, Y, st) {
+  const m = stairMarks(st), stone = '#9a948c';
+  g.save();
+  if (m.rings.length) { g.fillStyle = '#2c2925'; g.fillRect(X(st.x), Y(st.y), st.w * s, st.h * s); }
+  for (const r of m.rings) if (!r.fill) { g.beginPath(); g.arc(X(r.x), Y(r.y), r.r * s, 0, 7); g.fillStyle = shade(stone, -0.12); g.fill(); }
+  for (const wd of m.wedges) {
+    g.beginPath(); g.moveTo(X(wd.x), Y(wd.y)); g.arc(X(wd.x), Y(wd.y), wd.r * s, wd.a0 * Math.PI / 180, wd.a1 * Math.PI / 180); g.closePath();
+    g.fillStyle = shade(stone, 0.12); g.fill();
+  }
+  for (const l of m.landings) { g.fillStyle = shade(stone, 0.1); g.fillRect(X(l.x), Y(l.y), l.w * s, l.h * s); }
+  for (const fl of m.flights) {
+    const len = fl.axis === 'x' ? fl.w : fl.h, n = Math.max(1, Math.round(len * 3));
+    for (let i = 0; i < n; i++) {
+      const t = (i + 0.5) / n, k = fl.from > 0 ? i : n - 1 - i; // k-th strip from the low edge; t from the start
+      g.fillStyle = shade(stone, fl.dir === 'UP' ? 0.18 * t - 0.1 : -0.5 * t);
+      if (fl.axis === 'x') g.fillRect(X(fl.x + (k * len) / n), Y(fl.y), (len / n) * s + 0.5, fl.h * s);
+      else g.fillRect(X(fl.x), Y(fl.y + (k * len) / n), fl.w * s, (len / n) * s + 0.5);
+    }
+  }
+  g.strokeStyle = 'rgba(0,0,0,.4)'; g.lineWidth = Math.max(1, s * 0.03); g.beginPath();
+  for (const l of m.treads) { g.moveTo(X(l[0]), Y(l[1])); g.lineTo(X(l[2]), Y(l[3])); }
+  g.stroke();
+  shadowOn(g, s); g.strokeStyle = '#5a3a1e'; g.lineCap = 'round'; g.lineWidth = Math.max(2, s * 0.12); g.beginPath();
+  for (const l of m.rails) { g.moveTo(X(l[0]), Y(l[1])); g.lineTo(X(l[2]), Y(l[3])); }
+  for (const r of m.rings) if (!r.fill) { g.moveTo(X(r.x) + r.r * s, Y(r.y)); g.arc(X(r.x), Y(r.y), r.r * s, 0, 7); }
+  g.stroke(); shadowOff(g);
+  for (const r of m.rings) if (r.fill) { g.beginPath(); g.arc(X(r.x), Y(r.y), r.r * s, 0, 7); g.fillStyle = '#6e675e'; g.fill(); g.strokeStyle = '#3a3532'; g.lineWidth = Math.max(1, s * 0.04); g.stroke(); }
+  g.restore();
+}
+
 function drawLabels(g, b, L, fi, s, X, Y, furn, f) {
   for (const r of [...f.rooms, ...f.plots]) {
     const fr = furn.get(rkey(r)), p = fr ? fr.label : { x: r.x + r.w / 2, y: r.y + r.h / 2 };
@@ -761,8 +785,10 @@ function drawLabels(g, b, L, fi, s, X, Y, furn, f) {
     g.lineWidth = 3; g.strokeStyle = '#000'; g.strokeText('S', cx, cy); g.fillStyle = '#ffd36a'; g.fillText('S', cx, cy);
   }
   if (f.stairs) {
-    const st = f.stairs; g.font = `700 ${Math.max(10, s * 0.38)}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.lineWidth = 3; g.strokeStyle = '#000'; g.strokeText(st.label, X(st.x + st.w / 2), Y(st.y + st.h / 2)); g.fillStyle = '#fff'; g.fillText(st.label, X(st.x + st.w / 2), Y(st.y + st.h / 2));
+    g.font = `700 ${Math.max(10, s * 0.34)}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    for (const a of stairMarks(f.stairs).arrows) {
+      const [x, y] = a.at; g.lineWidth = 3; g.strokeStyle = '#000'; g.strokeText(a.label, X(x), Y(y)); g.fillStyle = '#fff'; g.fillText(a.label, X(x), Y(y));
+    }
   }
 }
 function numberBadge(g, cx, cy, n, rad) {
@@ -821,7 +847,9 @@ function composeFloor(b, L, meta, img, imgW, subtitle, numbers) {
 function canvasBlob(c, type = 'image/png', q) { return new Promise((res, rej) => c.toBlob(bl => (bl ? res(bl) : rej(new Error('Could not build the image'))), type, q)); }
 
 // Full furnished floor with numbers and key, ready to view or download.
-function furnishedFloorCanvas(b, L, fi, px = 56) {
-  const r = renderFurnished(b, L, fi, { px, labels: true });
+// labels=false: just the battle map itself (no numbers, secret-door marks, stair labels, title or key), for a VTT.
+function furnishedFloorCanvas(b, L, fi, px = 56, labels = true) {
+  const r = renderFurnished(b, L, fi, { px, labels });
+  if (!labels) return r.canvas;
   return composeFloor(b, L, r.meta, r.canvas, r.width, `${r.meta.floorName} · 1 square = 5 ft`, false);
 }

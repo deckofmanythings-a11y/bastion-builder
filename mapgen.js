@@ -79,13 +79,99 @@ function mapRooms(b) {
   for (const f of b.specials) { const sq = SPACES[facSpace(f)].squares, zone = MAP_ZONE[f.key] || 'service'; out.push({ ref: f.id, zone, sq, fb: DEF[f.key].name, key: f.key, shape: zone === 'demi' ? '' : validShape(f.shape, sq, zone === 'outdoor') }); }
   return out;
 }
-function mapSig(b) { return mapRooms(b).map(r => `${r.ref}:${r.sq}${r.shape ? ':' + r.shape : ''}`).sort().join('|') + (hallSquares(b) === 1 ? '|hall5' : ''); }
+function mapSig(b) { return mapRooms(b).map(r => `${r.ref}:${r.sq}${r.shape ? ':' + r.shape : ''}`).sort().join('|') + (hallSquares(b) === 1 ? '|hall5' : '') + (stairStyle(b) !== 'straight' ? `|st:${stairStyle(b)}` : ''); }
 
 // Main hall depth in squares: 2 (10 ft, default) or 1 (5 ft), from b.hallWidth. Set per generateMap call.
 let HALL = 2;
 const hallSquares = b => (+b.hallWidth === 5 ? 1 : 2);
+// Stair style, per Bastion (b.stairStyle). Every storey has the stairs in the same spot, opening off the hall.
+//   straight   (default) one 20-ft flight running along the north side of the hall (4x2). Flights alternate
+//              direction storey by storey, so each floor's landing is at the end where the flight arrives:
+//              even levels (ground, 2nd cellar...) land at the west end, odd levels at the east end.
+//   switchback two 5-ft-wide flights side by side with a half-landing at the back (2x2); you step on and off
+//              at the hall side on every floor (up on the west flight, down on the east one).
+//   spiral     a 10-ft spiral stair (2x2), stepping on and off at the same point (facing the hall) on every floor.
+// Maps drawn before this existed have a 2x4 stair with no style; they draw as a switchback in that well.
+const STAIR_STYLES = ['straight', 'switchback', 'spiral'];
+const stairStyle = b => (STAIR_STYLES.includes(b.stairStyle) ? b.stairStyle : 'straight');
+let STAIR = 'straight';
+// What to draw for a stair, in grid squares (shared by the graph-paper map, the battle map and the paint control):
+//   treads/rails: line segments [x1,y1,x2,y2]; landings: flat rects; flights: {x,y,w,h, axis, from, dir} for shading
+//   (axis 'x'/'y' = the direction it climbs, from = +1 if it starts at the low edge); arrows: {pts, label, at};
+//   rings: circles {x,y,r,fill}; wedges: spiral landing {x,y,r,a0,a1} (degrees, screen coords: 90 = south).
+function stairMarks(st) {
+  const m = { treads: [], rails: [], landings: [], flights: [], arrows: [], rings: [], wedges: [] };
+  const up = /UP/.test(st.label), dn = /DN/.test(st.label);
+  const { x, y, w, h } = st;
+  const style = st.style || 'switchback';
+  if (style === 'straight') {
+    const west = (((st.level || 0) % 2) + 2) % 2 === 0; // which end this floor's landing is at
+    const lx = west ? x : x + w - 1, fx = west ? x + 1 : x, fw = w - 1;
+    const far = west ? x + w - 0.3 : x + 0.3;
+    m.landings.push({ x: lx, y, w: 1, h });
+    const lanes = up && dn ? [{ y, h: 1, dir: 'DN' }, { y: y + 1, h: h - 1, dir: 'UP' }] : [{ y, h, dir: up ? 'UP' : 'DN' }];
+    for (const L of lanes) {
+      m.flights.push({ x: fx, y: L.y, w: fw, h: L.h, axis: 'x', from: west ? 1 : -1, dir: L.dir });
+      for (let i = 0; i <= fw * 3; i++) m.treads.push([fx + i / 3, L.y, fx + i / 3, L.y + L.h]);
+      const cy = L.y + L.h / 2;
+      m.arrows.push({ pts: [[lx + 0.5, cy], [far, cy]], label: L.dir, at: [fx + fw / 2, cy] });
+    }
+    if (lanes.length > 1) m.rails.push([fx, y + 1, fx + fw, y + 1]); // between the up and down flights
+    m.rails.push([fx, y + h, fx + fw, y + h]); // guard rail along the hall: you only step on at the landing
+  } else if (style === 'switchback') {
+    const ld = Math.min(0.7, h * 0.35), mid = x + w / 2, top = y + ld, bot = y + h;
+    m.landings.push({ x, y, w, h: ld });
+    for (const lx of [x, mid]) {
+      m.flights.push({ x: lx, y: top, w: w / 2, h: bot - top, axis: 'y', from: -1, dir: lx === x ? 'UP' : 'DN' });
+      for (let i = 0; i <= Math.floor((bot - top) * 3); i++) m.treads.push([lx, bot - i / 3, lx + w / 2, bot - i / 3]);
+    }
+    m.rails.push([mid, top, mid, bot]);
+    const wx = x + w / 4, ex = x + (3 * w) / 4, ty = top - ld / 2;
+    if (up && dn) {
+      m.arrows.push({ pts: [[wx, bot - 0.2], [wx, top + 0.1]], label: 'UP', at: [wx, (top + bot) / 2] });
+      m.arrows.push({ pts: [[ex, bot - 0.2], [ex, top + 0.1]], label: 'DN', at: [ex, (top + bot) / 2] });
+    } else if (up) m.arrows.push({ pts: [[wx, bot - 0.2], [wx, ty], [ex, ty], [ex, bot - 0.35]], label: 'UP', at: [wx, (top + bot) / 2] });
+    else m.arrows.push({ pts: [[ex, bot - 0.2], [ex, ty], [wx, ty], [wx, bot - 0.35]], label: 'DN', at: [ex, (top + bot) / 2] });
+  } else { // spiral
+    const cx = x + w / 2, cy = y + h / 2, R = Math.min(w, h) / 2 - 0.06, post = 0.15, a0 = 55, a1 = 125;
+    m.rings.push({ x: cx, y: cy, r: R }, { x: cx, y: cy, r: post, fill: true });
+    m.wedges.push({ x: cx, y: cy, r: R, a0, a1 });
+    const pt = (deg, r) => [cx + Math.cos((deg * Math.PI) / 180) * r, cy + Math.sin((deg * Math.PI) / 180) * r];
+    for (let a = a1; a <= a0 + 360 + 0.1; a += (360 - (a1 - a0)) / 12) m.treads.push([...pt(a, post), ...pt(a, R)]);
+    const arc = (from, to, r) => { const p = []; for (let i = 0; i <= 16; i++) p.push(pt(from + ((to - from) * i) / 16, r)); return p; };
+    // up winds clockwise from the landing's west edge, down anticlockwise from its east edge
+    if (up) m.arrows.push({ pts: arc(a1 + 8, a1 + 250, R * 0.62), label: 'UP', at: pt(a1 + 20, R * 0.62 + (dn ? 0 : 0)) });
+    if (dn) m.arrows.push({ pts: arc(a0 - 8, a0 - 250, R * (up ? 0.42 : 0.62)), label: 'DN', at: pt(a0 - 20, R * (up ? 0.42 : 0.62)) });
+  }
+  return m;
+}
+// SVG for a stair: part 'body' (treads, rails, arrows; under the walls) or 'labels' (on top).
+function stairSVG(st, X, Y, MS, part, ink) {
+  const m = stairMarks(st), out = [];
+  const seg = l => `M${X(l[0])} ${Y(l[1])}L${X(l[2])} ${Y(l[3])}`;
+  if (part === 'labels') {
+    for (const a of m.arrows) out.push(`<text x="${X(a.at[0])}" y="${Y(a.at[1]) + 3.5}" font-size="9.5" font-weight="700" text-anchor="middle" fill="${ink}" stroke="#fff" stroke-width="3" paint-order="stroke">${a.label}</text>`);
+    return out.join('');
+  }
+  for (const l of m.landings) out.push(`<rect x="${X(l.x)}" y="${Y(l.y)}" width="${l.w * MS}" height="${l.h * MS}" fill="#fff"/>`);
+  for (const wd of m.wedges) out.push(`<path d="M${X(wd.x)} ${Y(wd.y)}L${X(wd.x + Math.cos(wd.a0 * Math.PI / 180) * wd.r)} ${Y(wd.y + Math.sin(wd.a0 * Math.PI / 180) * wd.r)}A${wd.r * MS} ${wd.r * MS} 0 0 1 ${X(wd.x + Math.cos(wd.a1 * Math.PI / 180) * wd.r)} ${Y(wd.y + Math.sin(wd.a1 * Math.PI / 180) * wd.r)}Z" fill="none" stroke="${ink}" stroke-width="1"/>`);
+  if (m.treads.length) out.push(`<path d="${m.treads.map(seg).join('')}" stroke="${ink}" stroke-width="0.8" fill="none"/>`);
+  for (const r of m.rings) out.push(`<circle cx="${X(r.x)}" cy="${Y(r.y)}" r="${r.r * MS}" fill="${r.fill ? ink : 'none'}" stroke="${ink}" stroke-width="1.4"/>`);
+  if (m.rails.length) out.push(`<path d="${m.rails.map(seg).join('')}" stroke="${ink}" stroke-width="2.2" stroke-linecap="round" fill="none"/>`);
+  for (const a of m.arrows) {
+    const p = a.pts, [ax, ay] = p[p.length - 1], [bx, by] = p[p.length - 2];
+    const ang = Math.atan2(Y(ay) - Y(by), X(ax) - X(bx)), hl = MS * 0.28;
+    const head = [ang + 2.6, ang - 2.6].map(t => `${X(ax) + Math.cos(t) * hl} ${Y(ay) + Math.sin(t) * hl}`);
+    out.push(`<path d="M${p.map(q => `${X(q[0])} ${Y(q[1])}`).join('L')}M${head[0]}L${X(ax)} ${Y(ay)}L${head[1]}" stroke="${ink}" stroke-width="1.1" fill="none" stroke-linejoin="round"/>`);
+  }
+  return out.join('');
+}
+function stairBox(label, level) {
+  return STAIR === 'straight' ? { x: -1, y: -2, w: 4, h: 2, label, style: STAIR, level }
+    : { x: -1, y: -2, w: 2, h: 2, label, style: STAIR, level };
+}
 function generateMap(b, { seed, floors = 'auto', plan = null }) {
-  HALL = hallSquares(b);
+  HALL = hallSquares(b); STAIR = stairStyle(b);
   const rng = mulberry32(seed >>> 0);
   const rooms = mapRooms(b);
   if (plan) return finishLayout(b, seed, floors, ...planFloors(rooms, plan, rng), plan);
@@ -100,11 +186,11 @@ function generateMap(b, { seed, floors = 'auto', plan = null }) {
     ground = indoor.filter(r => r.zone !== 'top');
   }
   const stairs = upper.length && cellar.length ? 'UP/DN' : upper.length ? 'UP' : cellar.length ? 'DN' : null;
-  const fl = [buildFloor('Ground Floor', ground, rng, { foyer: true, stairs })];
+  const fl = [buildFloor('Ground Floor', ground, rng, { foyer: true, stairs, level: 0 })];
   // other storeys are fitted into the ground floor's outline, so the building stacks and the stairs line up
   const fit = groundFit(fl[0]);
-  if (upper.length) fl.push(buildFloor('Upper Floor', upper, rng, { stairs: 'DN', fit }));
-  if (cellar.length) fl.push(buildFloor('Cellar', cellar, rng, { stairs: 'UP', fit }));
+  if (upper.length) fl.push(buildFloor('Upper Floor', upper, rng, { stairs: 'DN', fit, level: 1 }));
+  if (cellar.length) fl.push(buildFloor('Cellar', cellar, rng, { stairs: 'UP', fit, level: -1 }));
   addYard(fl[0], rooms.filter(r => r.zone === 'outdoor'), rng);
   return finishLayout(b, seed, floors, fl, rooms.filter(r => r.zone === 'demi'), null);
 }
@@ -152,14 +238,14 @@ function planFloors(rooms, plan, rng) {
   const fl = [];
   for (const f of pf) { // ground floor first, so the others can be fitted into its outline
     const up = levels.some(l => l > f.level), dn = levels.some(l => l < f.level);
-    fl.push(buildFloor(f.name, null, rng, { foyer: f.level === 0, stairs: up && dn ? 'UP/DN' : up ? 'UP' : dn ? 'DN' : null,
+    fl.push(buildFloor(f.name, null, rng, { foyer: f.level === 0, stairs: up && dn ? 'UP/DN' : up ? 'UP' : dn ? 'DN' : null, level: f.level,
       wings: { east: f.east, west: f.west }, pairs: plan.pairs || [], secret: new Set(plan.secret || []), fit: f.level === 0 ? null : groundFit(fl[0]) }));
   }
   addYard(fl[0], outdoor, rng);
   return [fl, rooms.filter(r => r.zone === 'demi')];
 }
 
-function buildFloor(name, rooms, rng, { foyer, stairs, wings = null, pairs = [], secret = new Set(), fit = null }) {
+function buildFloor(name, rooms, rng, { foyer, stairs, level = 0, wings = null, pairs = [], secret = new Set(), fit = null }) {
   // a split facility becomes separate rooms, each placed on its own (they needn't be neighbours)
   const size = r => {
     const parts = roomDims(r, rng, MAP_DIMS);
@@ -179,7 +265,7 @@ function buildFloor(name, rooms, rng, { foyer, stairs, wings = null, pairs = [],
   } else {
     [east, west, doorPairs] = zoneWings(rooms.flatMap(size), rng);
   }
-  return placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret, fit });
+  return placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level, secret, fit });
 }
 
 function zoneWings(sized, rng) {
@@ -207,9 +293,10 @@ function groundFit(g) {
 }
 // fit: the ground floor's reach along the hall in each quarter (north/south x east/west). Upper floors and
 // cellars fill whichever quarter has the most of that outline left, so they stack over the ground floor.
-function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret, fit = null }) {
+function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0, secret, fit = null }) {
   const placed = [], doors = [];
-  const start = { nE: stairs ? 1 : -1, nW: -1, sE: 1, sW: -1 };
+  const st = stairs ? stairBox(stairs, level) : null;
+  const start = { nE: st ? st.x + st.w : -1, nW: -1, sE: 1, sW: -1 };
   const cur = { ...start };
   const side = { N: 0, S: 0 };
   const room = q => (fit ? Math.abs(fit.ext[q] - start[q]) : 0) - Math.abs(cur[q] - start[q]);
@@ -291,7 +378,6 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, secret, f
     front = { y: HALL + fd };
     doors.push({ x: -1, y: HALL + fd, o: 'h', kind: 'front' }, { x: 0, y: HALL + fd, o: 'h', kind: 'front' });
   }
-  const st = stairs ? { x: -1, y: -4, w: 2, h: 4, label: stairs } : null;
   return { name, rooms: placed, hall, stairs: st, doors, front, plots: [], ext: { ...cur } };
 }
 
@@ -429,11 +515,7 @@ function renderMapSVG(b, L) {
     // outdoor plots: dashed fences
     for (const r of f.plots) out.push(`<rect x="${X(r.x)}" y="${Y(r.y)}" width="${r.w * MS}" height="${r.h * MS}" fill="none" stroke="${INK}" stroke-width="1.6" stroke-dasharray="6 3"/>`);
     // stairs treads
-    if (f.stairs) {
-      const s = f.stairs; let d = '';
-      for (let i = 1; i < s.h * 3; i++) d += `M${X(s.x)} ${Y(s.y) + i * MS / 3}H${X(s.x + s.w)}`;
-      out.push(`<path d="${d}" stroke="${INK}" stroke-width="1"/>`);
-    }
+    if (f.stairs) out.push(stairSVG(f.stairs, X, Y, MS, 'body', INK));
     // walls
     const nooks = f.rooms.flatMap(r => placeNooks(b, r));
     out.push(`<path d="${wallPath(f, X, Y, nooks)}" stroke="${INK}" stroke-width="3.2" stroke-linecap="square" fill="none"/>`);
@@ -453,7 +535,7 @@ function renderMapSVG(b, L) {
       out.push(`<rect x="${cx - MS * 0.27}" y="${cy - MS * 0.14}" width="${MS * 0.54}" height="${MS * 0.28}" fill="#fff" stroke="${INK}" stroke-width="1.1"/>`);
       out.push(`<text x="${X(k.x + k.w / 2)}" y="${Y(k.y + k.h / 2) + 3}" font-size="8" text-anchor="middle" fill="${INK}">${e(NOOK_ABBR[k.n.kind] || (k.n.label || k.n.kind || '?').slice(0, 2))}</text>`);
     }
-    if (f.stairs) { const s = f.stairs; out.push(`<text x="${X(s.x + s.w / 2)}" y="${Y(s.y + s.h / 2) + 4}" font-size="10" font-weight="700" text-anchor="middle" fill="${INK}" stroke="#fff" stroke-width="3" paint-order="stroke">${s.label}</text>`); }
+    if (f.stairs) out.push(stairSVG(f.stairs, X, Y, MS, 'labels', INK));
     for (const r of f.plots) roomText(out, b, r, X(r.x + r.w / 2), Y(r.y + r.h / 2), r.w, r.h, e);
     for (const r of f.rooms) {
       const D = Math.max(0, ...nooks.filter(k => k.n.parent === r.ref).map(k => k.h));
@@ -591,7 +673,12 @@ function renderControlPNG(b, L, fi, long = 1024) {
   g.stroke(new Path2D(wallPath(f, X, Y, nooks)));
   g.lineWidth = Math.max(2, s * 0.12);
   for (const r of f.plots) g.strokeRect(X(r.x), Y(r.y), r.w * s, r.h * s);
-  if (f.stairs) { const st = f.stairs; g.lineWidth = Math.max(1, s * 0.06); g.beginPath(); for (let i = 1; i < st.h * 3; i++) { g.moveTo(X(st.x), Y(st.y) + i * s / 3); g.lineTo(X(st.x + st.w), Y(st.y) + i * s / 3); } g.stroke(); }
+  if (f.stairs) {
+    const m = stairMarks(f.stairs); g.beginPath();
+    for (const l of [...m.treads, ...m.rails]) { g.moveTo(X(l[0]), Y(l[1])); g.lineTo(X(l[2]), Y(l[3])); }
+    for (const r of m.rings) { g.moveTo(X(r.x) + r.r * s, Y(r.y)); g.arc(X(r.x), Y(r.y), r.r * s, 0, 7); }
+    g.lineWidth = Math.max(1, s * 0.06); g.stroke();
+  }
   if (box.wall) {
     const w = box.wall; g.lineWidth = Math.max(4, s * 0.45); g.beginPath();
     [[1, w.y1], [w.x1, w.y1], [w.x1, w.y0], [w.x0, w.y0], [w.x0, w.y1], [-1, w.y1]].forEach(([a, c2], i) => (i ? g.lineTo(X(a), Y(c2)) : g.moveTo(X(a), Y(c2))));

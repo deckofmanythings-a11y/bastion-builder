@@ -1064,7 +1064,7 @@ function mapsView(b) {
     <p class="hint">Upload your own maps of ${esc(b.name)} — floor plans, sketches, VTT battle maps. Everyone in the party (and the DM) can view and download them. PNG, JPG, WebP, GIF or PDF, up to 10 MB each.</p>
     <div class="card map-upload">
       <label class="btn">${uploading ? 'Uploading…' : '+ Upload maps'}<input id="mapUpload" type="file" multiple accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,image/png,image/jpeg,image/webp,image/gif,application/pdf" hidden ${uploading ? 'disabled' : ''}></label>
-      <span class="small">Uploaded maps can't be deleted from the page — ask the DM if one needs removing.</span>
+      <span class="small">To delete a map you'll be asked to type ${esc(delName(b) ? `the character's name (${delName(b)})` : 'the name')} exactly.</span>
     </div>
     ${maps.length ? `<div class="maps">${maps.slice().reverse().map(m => mapCard(m)).join('')}</div>`
       : '<div class="placeholder">No maps uploaded yet.</div>'}`;
@@ -1079,8 +1079,47 @@ function mapCard(m) {
     </a>
     <input class="mapcap" data-map-caption="${m.id}" value="${esc(m.caption)}" placeholder="Caption (e.g. Ground floor)">
     <div class="small muted">${esc(m.name)} · ${fmtBytes(m.size)} · ${new Date(m.uploadedAt).toLocaleDateString()}</div>
-    <div class="row"><a class="btn xs ghost" href="${esc(url)}" target="_blank" rel="noopener">Open</a><a class="btn xs" href="${esc(mapUrl(m, true))}">Download</a></div>
+    <div class="row"><a class="btn xs ghost" href="${esc(url)}" target="_blank" rel="noopener">Open</a><a class="btn xs" href="${esc(mapUrl(m, true))}">Download</a>
+      <button class="btn xs ghost danger" data-map-del="${m.id}" title="Delete this map">Delete</button></div>
   </div>`;
+}
+
+// Deleting a map: the page asks for the character's name typed exactly, saves the Bastion without the map, then
+// asks bb-delete-map to remove the file (it re-checks the name and that the map is no longer listed).
+const delName = b => String(b.character || b.name || '').trim();
+function askDeleteMap(b, mapId) {
+  const m = (b.maps || []).find(x => x.id === mapId); if (!m) return;
+  const who = delName(b);
+  showModal(`<div class="mhead"><h2>Delete map?</h2><button class="btn ghost sm" data-close>Cancel</button></div>
+    <p><b>${esc(m.caption || m.name)}</b> (${esc(m.name)}) will be removed from ${esc(b.name)} for everyone. This can't be undone.</p>
+    <p>To confirm, type the character's name exactly as shown (capitals count): <b class="exact-name">${esc(who)}</b></p>
+    <input id="mapDelName" class="wide" autocomplete="off" spellcheck="false" aria-label="Character name">
+    <div class="row"><button class="btn ghost danger" id="mapDelGo" data-act="mapDelGo" data-map="${esc(m.id)}" disabled>Delete map</button></div>`);
+  setTimeout(() => $('#mapDelName')?.focus(), 0);
+}
+async function deleteMap(bid, mapId, typed) {
+  let b = state.bastions.find(x => x.id === bid); if (!b) return;
+  const m = (b.maps || []).find(x => x.id === mapId); if (!m) return;
+  if (typed.trim() !== delName(b)) { toast("The name doesn't match."); return; }
+  closeModal();
+  b.maps = b.maps.filter(x => x.id !== mapId);
+  addLog(b, `Map deleted: ${m.name}.`, 'build');
+  writeCache(); render();
+  // save now (not on the usual debounce) so the server sees the map is gone before the file is removed
+  clearTimeout(pushTimer); dirty.delete(bid);
+  await enqueue(bid, () => pushOne(bid));
+  b = state.bastions.find(x => x.id === bid);
+  if (!b || synced[bid] !== JSON.stringify(b) || (b.maps || []).some(x => x.id === mapId)) {
+    toast('The map was taken off the list, but the file could not be removed yet (the Bastion did not save). Try again later.'); return;
+  }
+  try {
+    const r = await fetch(`${SB_URL}/functions/v1/bb-delete-map`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB_KEY },
+      body: JSON.stringify({ campaign: CAMPAIGN, bastionId: bid, path: m.path, character: typed }),
+    });
+    const out = await r.json().catch(() => ({}));
+    toast(r.ok ? `Deleted ${m.caption || m.name}.` : `Removed from the list, but the file wasn't deleted: ${out.message || r.status}`);
+  } catch { toast('Removed from the list, but the file could not be deleted (no connection).'); }
 }
 
 function uploadMaps(input) { const files = [...input.files]; input.value = ''; return uploadMapFiles(files); }
@@ -1187,7 +1226,8 @@ function nookFits(b, ref, squares, except) {
 function lineMapCard(b) {
   const lm = b.lineMap;
   const floorsSel = `<select data-map-floors title="How many storeys"><option value="auto" ${lm?.floors !== 'single' ? 'selected' : ''}>Floors: automatic</option><option value="single" ${lm?.floors === 'single' ? 'selected' : ''}>Floors: single storey</option></select>`;
-  const hallSel = `<select data-map-hall title="Width of the central hall"><option value="10">Hall: 10 ft wide</option><option value="5" ${+b.hallWidth === 5 ? 'selected' : ''}>Hall: 5 ft wide</option></select>`;
+  const hallSel = `<select data-map-hall title="Width of the central hall"><option value="10">Hall: 10 ft wide</option><option value="5" ${+b.hallWidth === 5 ? 'selected' : ''}>Hall: 5 ft wide</option></select>`
+    + `<select data-map-stairs title="Only matters once the Bastion has more than one floor. Straight: a 20-ft flight along the hall, landing at alternate ends floor by floor. Switchback: two short flights with a half-landing, on and off at the hall. Spiral: 10 ft across, on and off at the same point on every floor.">${[['straight', 'Stairs: straight'], ['switchback', 'Stairs: switchback'], ['spiral', 'Stairs: spiral']].map(([v, l]) => `<option value="${v}" ${stairStyle(b) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
   if (!lm) return `
     <div class="section-head"><h2>Graph-Paper Map</h2></div>
     <div class="card linemap-empty">
@@ -1213,10 +1253,11 @@ function lineMapCard(b) {
 
 // ----- furnished battle map (furnish.js): drawn in code from the facilities, no AI -----
 const furnPrev = { key: '', url: '' };
+const furnUi = { labels: true }; // battle map: draw room numbers, title and key (off = a clean image for a VTT)
 function furnishedPreview(b, fi) {
-  const key = JSON.stringify([b.id, b.name, b.lineMap.seed, b.lineMap.sig, fi, b.nooks || [], b.walls || {}, b.lineMap.layout.fl.length]);
+  const key = JSON.stringify([b.id, b.name, b.lineMap.seed, b.lineMap.sig, fi, b.nooks || [], b.walls || {}, b.lineMap.layout.fl.length, furnUi.labels]);
   if (furnPrev.key !== key) {
-    try { furnPrev.url = furnishedFloorCanvas(b, b.lineMap.layout, fi, 40).toDataURL('image/jpeg', 0.88); }
+    try { furnPrev.url = furnishedFloorCanvas(b, b.lineMap.layout, fi, 40, furnUi.labels).toDataURL('image/jpeg', 0.88); }
     catch (err) { console.error(err); furnPrev.url = ''; }
     furnPrev.key = key;
   }
@@ -1227,6 +1268,7 @@ function furnishedCard(b) {
   const url = furnishedPreview(b, fi);
   return `<div class="section-head"><h2>Battle Map</h2>
       <div class="row">${L.fl.length > 1 ? `<select id="reskinFloor">${L.fl.map((f, i) => `<option value="${i}" ${i === fi ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select>` : ''}
+      <label class="check small" title="Room numbers, secret-door marks, stair labels, title and key. Untick for a clean image to drop into a VTT."><input type="checkbox" id="furnLabels" ${furnUi.labels ? 'checked' : ''}> Labels</label>
       <button class="btn sm ghost" data-act="dlFurn">PNG</button><button class="btn sm" data-act="saveFurn" title="Add a PNG of this floor to the uploaded maps">Save to Maps</button></div></div>
     <div class="card furnished">
       ${url ? `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Furnished map of ${esc(L.fl[fi].name)}"></a>` : '<p class="muted">Could not draw this floor.</p>'}
@@ -1405,9 +1447,11 @@ function toast(msg) {
 
 // ---------- events wiring ----------
 document.addEventListener('click', (e) => {
-  const el = e.target.closest('[data-act],[data-tab],[data-mode],[data-pick],[data-close],[data-ev-act],[data-pick-event],[data-creature-del],[data-open-bastion],[data-nook-del]');
+  const el = e.target.closest('[data-act],[data-tab],[data-mode],[data-pick],[data-close],[data-ev-act],[data-pick-event],[data-creature-del],[data-open-bastion],[data-nook-del],[data-map-del]');
   if (!el) return;
   const b = B();
+  if (el.dataset.mapDel) { askDeleteMap(b, el.dataset.mapDel); return; }
+  if (el.dataset.act === 'mapDelGo') { deleteMap(b.id, el.dataset.map, $('#mapDelName')?.value || ''); return; }
   if (el.dataset.tab) { tab = el.dataset.tab; render(); return; }
   if (el.dataset.nookDel) { b.nooks = (b.nooks || []).filter(n => n.id !== el.dataset.nookDel); commit(); return; }
   if (el.dataset.openBastion) { setActive(el.dataset.openBastion); render(); window.scrollTo(0, 0); return; }
@@ -1452,8 +1496,8 @@ document.addEventListener('click', (e) => {
     case 'updateMap': drawLineMap(b, b.lineMap.seed, b.lineMap.floors); commit(); return;
     case 'dlMapSvg': downloadBlob(new Blob([renderMapSVG(b, b.lineMap.layout)], { type: 'image/svg+xml' }), mapFileName(b, 'svg')); return;
     case 'dlFurn': case 'saveFurn': {
-      const fi = Math.min(reskinUi.floor, b.lineMap.layout.fl.length - 1), name = mapFileName(b, 'png').replace(/\.png$/, `-${b.lineMap.layout.fl[fi].name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-battlemap.png`);
-      canvasBlob(furnishedFloorCanvas(b, b.lineMap.layout, fi, 70)).then(bl => el.dataset.act === 'dlFurn' ? downloadBlob(bl, name) : uploadMapFiles([new File([bl], name, { type: 'image/png' })])).catch(err => toast(err.message));
+      const fi = Math.min(reskinUi.floor, b.lineMap.layout.fl.length - 1), name = mapFileName(b, 'png').replace(/\.png$/, `-${b.lineMap.layout.fl[fi].name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}${furnUi.labels ? '' : '-unlabelled'}-battlemap.png`);
+      canvasBlob(furnishedFloorCanvas(b, b.lineMap.layout, fi, 70, furnUi.labels)).then(bl => el.dataset.act === 'dlFurn' ? downloadBlob(bl, name) : uploadMapFiles([new File([bl], name, { type: 'image/png' })])).catch(err => toast(err.message));
       return;
     }
     case 'dlMapPng':
@@ -1527,6 +1571,15 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// map delete confirm: the button only unlocks once the name matches exactly
+document.addEventListener('input', (e) => {
+  if (e.target.id !== 'mapDelName') return;
+  const go = $('#mapDelGo'), b = B(); if (go && b) go.disabled = e.target.value.trim() !== delName(b);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.target.id === 'mapDelName' && e.key === 'Enter' && !$('#mapDelGo')?.disabled) { e.preventDefault(); $('#mapDelGo').click(); }
+});
+
 document.addEventListener('change', (e) => {
   const el = e.target; const b = B(); if (!b) return;
   if (el.id === 'bastionSelect') { setActive(el.value); render(); return; }
@@ -1535,6 +1588,7 @@ document.addEventListener('change', (e) => {
   if (el.id === 'aiLayout') { aiDraft[b.id] = el.value; return; }
   if (el.id === 'reskinStyle') { reskinUi.style = el.value; return; }
   if (el.id === 'reskinExtra') { reskinUi.extra = el.value; return; }
+  if (el.id === 'furnLabels') { furnUi.labels = el.checked; render(); return; }
   if (el.id === 'reskinFloor') { reskinUi.floor = +el.value; render(); return; }
   if (el.dataset.nookField) {
     const n = (b.nooks || []).find(x => x.id === el.closest('[data-nook]').dataset.nook); if (!n) return;
@@ -1554,6 +1608,11 @@ document.addEventListener('change', (e) => {
   }
   if (el.dataset.mapHall != null) {
     if (el.value === '5') b.hallWidth = 5; else delete b.hallWidth;
+    if (b.lineMap) drawLineMap(b, b.lineMap.seed, b.lineMap.floors);
+    commit(); return;
+  }
+  if (el.dataset.mapStairs != null) {
+    if (el.value === 'straight') delete b.stairStyle; else b.stairStyle = el.value;
     if (b.lineMap) drawLineMap(b, b.lineMap.seed, b.lineMap.floors);
     commit(); return;
   }

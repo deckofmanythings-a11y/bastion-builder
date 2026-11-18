@@ -315,3 +315,6 @@ dialog h4 { margin: 1rem 0 .4rem; color: var(--gold); }
 .rjob.running .rph { animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .45; } }
 .card.furnished img { display: block; width: 100%; height: auto; border-radius: 6px; }
+
+.exact-name { text-transform: none; letter-spacing: 0; color: var(--gold2); font-size: 1.05em; }
+#mapDelName { width: 100%; margin: 4px 0 10px; }
