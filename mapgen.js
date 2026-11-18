@@ -332,9 +332,9 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
   const pending = [...east, ...west], taken = new Set(), alcoves = [];
   // An L room's notch: the biggest waiting single room that fills its full depth goes in, against the L; what's left
   // of the notch (if anything) opens onto the hall as an alcove.
-  const fillNotch = (c, s) => {
-    let best = null;
-    for (const blk of pending) {
+  const fillNotch = (c, s, mate = null) => {
+    let best = mate ? { blk: null, v: mate, w: mate.parts[0].w } : null;
+    if (!best) for (const blk of pending) {
       if (taken.has(blk) || blk.length !== 1 || blk[0].parts.length !== 1 || blk[0].parts[0].cut) continue;
       for (const v of shapesOf(blk[0])) {
         const pp = v.parts[0];
@@ -343,7 +343,7 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
     }
     const inner = c.left ? c.x + c.w : c.x; // the L's own wall beside the notch
     if (best) {
-      taken.add(best.blk);
+      if (best.blk) taken.add(best.blk);
       const q = best.v, fx = c.left ? inner - best.w : inner;
       const rect = { ref: q.ref, fb: q.fb, zone: q.zone, x: fx, y: c.y, w: best.w, h: c.h, side: s, inNotch: true };
       if (q.split) { rect.part = q.split.i; rect.parts = q.split.n; }
@@ -362,8 +362,21 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
       place(blk, s, dir);
     }
   };
+  // in a pair (e.g. Bedroom + Parlor), a room that fits its partner's L notch goes in the notch
+  const notchMate = blk => {
+    const L = blk.find(r => r.parts.length === 1 && r.parts[0].cut); if (!L) return null;
+    const c = L.parts[0].cut;
+    for (const r of blk) {
+      if (r === L || r.parts.length !== 1 || r.parts[0].cut) continue;
+      const v = shapesOf(r).find(v => v.parts[0].d === c.d && v.parts[0].w <= c.w);
+      if (v) return { L, r, v };
+    }
+    return null;
+  };
   const place = (blk, s, dir) => {
+      const nm = notchMate(blk);
       for (const r of blk) {
+        if (nm && r === nm.r) continue; // placed inside its partner's notch instead
         const key = s === 'N' ? (dir > 0 ? 'nE' : 'nW') : (dir > 0 ? 'sE' : 'sW');
         const parts = r.parts || [{ w: r.w, d: r.d }];
         parts.forEach((p, pi) => {
@@ -378,7 +391,7 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
           // the room's own door: on the part of its front wall that actually touches the hall
           const fx0 = p.cut && left ? x + p.cut.w : x, fw = p.cut ? p.w - p.cut.w : p.w;
           doors.push({ x: fx0 + Math.floor(rng() * fw), y: s === 'N' ? 0 : HALL, o: 'h', kind: secret.has(r.ref) ? 'secret' : r.zone === 'secure' ? 'locked' : 'door' });
-          if (p.cut) fillNotch({ ...rect.cut, left }, s);
+          if (p.cut) fillNotch({ ...rect.cut, left }, s, nm && nm.L === r ? nm.v : null);
         });
       }
   };
@@ -399,7 +412,14 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
   for (const [ra, rc] of doorPairs) {
     const as = placed.filter(r => r.ref === ra), cs = placed.filter(r => r.ref === rc);
     const hit = as.flatMap(a => cs.map(c => [a, c])).find(([a, c]) => a.side === c.side && (a.x + a.w === c.x || c.x + c.w === a.x));
-    if (hit) { const [a, c] = hit; doors.push({ x: Math.max(a.x, c.x), y: a.side === 'N' ? -1 : HALL, o: 'v', kind: 'door' }); }
+    if (hit) { const [a, c] = hit; doors.push({ x: Math.max(a.x, c.x), y: a.side === 'N' ? -1 : HALL, o: 'v', kind: 'door' }); continue; }
+    const nest = as.flatMap(a => cs.map(c => [a, c])).flatMap(([a, c]) => [[a, c], [c, a]])
+      .find(([l, q]) => l.cut && q.inNotch && q.side === l.side && q.x >= l.cut.x && q.x + q.w <= l.cut.x + l.cut.w);
+    if (nest) {
+      const [l, q] = nest, wallX = l.cut.x === l.x ? q.x + q.w : q.x; // the L's wall beside the notch room
+      if (wallX > l.x && wallX < l.x + l.w) doors.push({ x: wallX, y: l.side === 'N' ? -1 : HALL, o: 'v', kind: 'door' });
+      else doors.push({ x: q.x + Math.floor(q.w / 2), y: l.side === 'N' ? q.y : q.y + q.h, o: 'h', kind: 'door' }); // through its back wall
+    }
   }
   const xs = placed.flatMap(r => [r.x, r.x + r.w]).concat([-1, 1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
