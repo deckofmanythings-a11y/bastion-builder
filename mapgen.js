@@ -31,7 +31,8 @@ const MAP_DIMS = { 4: [[2, 2]], 16: [[4, 4], [4, 4], [4, 4], [8, 2], [2, 8]], 36
 const PLOT_DIMS = { 4: [[2, 2]], 16: [[4, 4], [4, 4], [8, 2]], 36: [[6, 6], [6, 6], [9, 4], [12, 3]] };
 // Shapes a player can pin on a facility. W is along the hall (or the path, for yard plots), D away from it.
 //   'WxD'          a rectangle
-//   'LWxD-wxd'     an L: a WxD room with a wxd corner cut out of the back (away from the hall)
+//   'LWxD-wxd'     an L: a WxD room with a wxd corner cut out of its front (hall-side) corner. The notch opens onto
+//                  the hall, so another facility that fits can sit in it; any part left over becomes a hall alcove.
 //   'AxB+CxD+...'  the facility's squares split into several rooms side by side, each with its own hall door
 const ROOM_SHAPES = {
   4: ['2x2', 'L3x2-2x1', '1x2+1x2'],
@@ -309,7 +310,7 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
     let c = cur[q], n = 0; const dir = q[1] === 'E' ? 1 : -1;
     for (const r of blk) for (const p of r.parts) {
       const x = dir > 0 ? c : c - p.w, y = q[0] === 'n' ? -p.d : HALL; c += dir * p.w;
-      for (const z of roomRects({ x, y, w: p.w, h: p.d, cut: p.cut ? { x, y, w: p.cut.w, h: p.cut.d } : null }))
+      for (const z of roomRects({ x, y, w: p.w, h: p.d, cut: p.cut ? { x, y: q[0] === 'n' ? y + p.d - p.cut.d : y, w: p.cut.w, h: p.cut.d } : null }))
         for (let yy = z.y; yy < z.y + z.h; yy++) for (let xx = z.x; xx < z.x + z.w; xx++) if (!fit.shell.has(`${xx},${yy}`)) n++;
     }
     return n;
@@ -328,8 +329,35 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
     }
     return bestC;
   };
+  const pending = [...east, ...west], taken = new Set(), alcoves = [];
+  // An L room's notch: the biggest waiting single room that fills its full depth goes in, against the L; what's left
+  // of the notch (if anything) opens onto the hall as an alcove.
+  const fillNotch = (c, s) => {
+    let best = null;
+    for (const blk of pending) {
+      if (taken.has(blk) || blk.length !== 1 || blk[0].parts.length !== 1 || blk[0].parts[0].cut) continue;
+      for (const v of shapesOf(blk[0])) {
+        const pp = v.parts[0];
+        if (pp.d === c.h && pp.w <= c.w && (!best || pp.w > best.w)) best = { blk, v, w: pp.w };
+      }
+    }
+    const inner = c.left ? c.x + c.w : c.x; // the L's own wall beside the notch
+    if (best) {
+      taken.add(best.blk);
+      const q = best.v, fx = c.left ? inner - best.w : inner;
+      const rect = { ref: q.ref, fb: q.fb, zone: q.zone, x: fx, y: c.y, w: best.w, h: c.h, side: s, inNotch: true };
+      if (q.split) { rect.part = q.split.i; rect.parts = q.split.n; }
+      placed.push(rect);
+      doors.push({ x: fx + Math.floor(rng() * best.w), y: s === 'N' ? 0 : HALL, o: 'h', kind: secret.has(q.ref) ? 'secret' : q.zone === 'secure' ? 'locked' : 'door' });
+      if (best.w < c.w) alcoves.push({ x: c.left ? c.x : c.x + best.w, y: c.y, w: c.w - best.w, h: c.h });
+    } else alcoves.push({ x: c.x, y: c.y, w: c.w, h: c.h });
+  };
+  const hasL = blk => blk.some(r => r.parts.some(q => q.cut));
   const put = (blocks, dir) => {
-    for (const blk of blocks) {
+    // L rooms go first in their wing, so the rooms that could fill their notches are still waiting
+    for (const blk of [...blocks.filter(hasL), ...blocks.filter(x => !hasL(x))]) {
+      if (taken.has(blk)) continue;
+      taken.add(blk); // placed: no longer available to fill a notch
       const s = side.N < side.S || (side.N === side.S && rng() < 0.5) ? 'N' : 'S';
       place(blk, s, dir);
     }
@@ -344,20 +372,22 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
           const y = s === 'N' ? -p.d : HALL;
           const rect = { ref: r.ref, fb: r.fb, zone: r.zone, x, y, w: p.w, h: p.d, side: s };
           if (r.split) { rect.part = r.split.i; rect.parts = r.split.n; }
-          if (p.cut) { // the cut corner is at the back; which end is fixed per facility so redraws agree
-            const left = refHash(r.ref) & 1;
-            rect.cut = { x: left ? x : x + p.w - p.cut.w, y: s === 'N' ? y : y + p.d - p.cut.d, w: p.cut.w, h: p.cut.d };
-          }
+          const left = refHash(r.ref) & 1; // which end the notch is at is fixed per facility, so redraws agree
+          if (p.cut) rect.cut = { x: left ? x : x + p.w - p.cut.w, y: s === 'N' ? -p.cut.d : HALL, w: p.cut.w, h: p.cut.d };
           placed.push(rect);
-          const dx = x + Math.floor(rng() * p.w);
-          doors.push({ x: dx, y: s === 'N' ? 0 : HALL, o: 'h', kind: secret.has(r.ref) ? 'secret' : r.zone === 'secure' ? 'locked' : 'door' });
+          // the room's own door: on the part of its front wall that actually touches the hall
+          const fx0 = p.cut && left ? x + p.cut.w : x, fw = p.cut ? p.w - p.cut.w : p.w;
+          doors.push({ x: fx0 + Math.floor(rng() * fw), y: s === 'N' ? 0 : HALL, o: 'h', kind: secret.has(r.ref) ? 'secret' : r.zone === 'secure' ? 'locked' : 'door' });
+          if (p.cut) fillNotch({ ...rect.cut, left }, s);
         });
       }
   };
   if (fit) {
     // upper floor / cellar: ignore the wing split and give each block (widest first) to the emptiest quarter
     const bw = blk => blk.reduce((t, r) => t + r.w, 0);
-    for (const blk of [...east, ...west].sort((a, c) => bw(c) - bw(a))) {
+    for (const blk of [...east, ...west].sort((a, c) => hasL(c) - hasL(a) || bw(c) - bw(a))) {
+      if (taken.has(blk)) continue;
+      taken.add(blk);
       const c = choose(blk, ['nE', 'sE', 'nW', 'sW']);
       place(c.v, c.q[0].toUpperCase(), c.q[1] === 'E' ? 1 : -1);
     }
@@ -373,7 +403,7 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
   }
   const xs = placed.flatMap(r => [r.x, r.x + r.w]).concat([-1, 1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
-  const hall = [{ x: minX, y: 0, w: maxX - minX, h: HALL }];
+  const hall = [{ x: minX, y: 0, w: maxX - minX, h: HALL }, ...alcoves];
   let front = null;
   if (foyer) {
     const nb = placed.filter(r => r.side === 'S' && (r.x + r.w === -1 || r.x === 1));
@@ -640,8 +670,9 @@ function svgToPngBlob(svg, scale = 2) {
 function placeNooks(b, r) {
   const list = (b.nooks || []).filter(n => n.parent === r.ref);
   if (!list.length || r.h < 2 || r.part) return []; // a split facility keeps its nooks in its first room
-  // an L room's back wall is shorter (the cut corner), so its nooks start beside the cut
-  const bx0 = r.cut && r.cut.x === r.x ? r.x + r.cut.w : r.x, bx1 = r.cut && r.cut.x !== r.x ? r.cut.x : r.x + r.w, bw = bx1 - bx0;
+  // an L room drawn before v27 has its cut on the back wall, so its nooks start beside the cut
+  const backCut = r.cut && (r.side === 'S' ? r.cut.y + r.cut.h === r.y + r.h : r.cut.y === r.y);
+  const bx0 = backCut && r.cut.x === r.x ? r.x + r.cut.w : r.x, bx1 = backCut && r.cut.x !== r.x ? r.cut.x : r.x + r.w, bw = bx1 - bx0;
   const total = list.reduce((t, n) => t + Math.max(1, +n.squares || 1), 0);
   const D = Math.min(r.h - 1, Math.max(1, Math.ceil(total / bw)));
   const out = []; let cx = bx0;
