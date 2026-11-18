@@ -306,7 +306,8 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
   const st = stairs ? stairBox(stairs, level) : null;
   const start = { nE: st ? st.x + st.w : -1, nW: -1, sE: 1, sW: -1 };
   const cur = { ...start };
-  const side = { N: 0, S: 0 };
+  const wingSide = { 1: { N: 0, S: 0 }, [-1]: { N: 0, S: 0 } }; // north/south balance, kept per wing
+  let side = wingSide[1];
   const room = q => (fit ? Math.abs(fit.ext[q] - start[q]) : 0) - Math.abs(cur[q] - start[q]);
   // squares of a block that would hang outside the ground floor's outline if put in quarter q
   const overhang = (blk, q) => {
@@ -357,6 +358,7 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
   };
   const hasL = blk => blk.some(r => r.parts.some(q => q.cut));
   const put = (blocks, dir) => {
+    side = wingSide[dir];
     // L rooms go first in their wing, so the rooms that could fill their notches are still waiting
     for (const blk of [...blocks.filter(hasL), ...blocks.filter(x => !hasL(x))]) {
       if (taken.has(blk)) continue;
@@ -409,7 +411,9 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
     }
   } else {
     // reset side balance per wing so both wings fill north and south evenly
-    put(east, 1); side.N = side.S = 0; put(west, -1);
+    // L rooms of BOTH wings go first, so any room that could fill a notch (from either wing) is still waiting
+    put(east.filter(hasL), 1); put(west.filter(hasL), -1);
+    put(east, 1); put(west, -1);
   }
 
   for (const [ra, rc] of doorPairs) {
