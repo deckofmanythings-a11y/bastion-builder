@@ -2,8 +2,7 @@
 // Furnished battle-map render of one floor of the generated layout (mapgen.js).
 // Everything that matters on a map is decided here in code, from the Bastion's data, so it is always right:
 // which furniture each facility gets (a bed in the bedroom, an anvil in the smithy), where it stands (against
-// the back wall, never in front of a door), the doors themselves, and the front entrance. The AI "Paint it"
-// pass only restyles this picture lightly; it doesn't get to invent the room contents.
+// the back wall, never in front of a door), the doors themselves, and the front entrance.
 //
 // Units: furniture is placed on a half-square grid inside each room. Item specs are
 // [kind, where, width along the wall, depth, opts] in half squares. `where`:
@@ -812,9 +811,8 @@ function numberBadge(g, cx, cy, n, rad) {
   g.restore();
 }
 
-// Title strip + numbers + key around a floor image (our furnished render or an AI-painted version of it).
-// numbers: draw room badges on top (needed for AI output; the furnished render can bring its own).
-function composeFloor(b, L, meta, img, imgW, subtitle, numbers) {
+// Title strip + key around a furnished floor render (which draws its own room numbers).
+function composeFloor(b, L, meta, img, imgW, subtitle) {
   const k = img.width / imgW;
   const f = L.fl[meta.floor] || L.fl.find(x => x.name === meta.floorName);
   const drawn = f ? [...f.rooms, ...f.plots] : [];
@@ -829,19 +827,6 @@ function composeFloor(b, L, meta, img, imgW, subtitle, numbers) {
   g.fillStyle = '#c4b496'; g.font = '13px Georgia, serif'; g.fillText(subtitle, 14, 48);
   const same = meta.seed === L.seed && meta.sig === L.sig;
   if (f && same) {
-    if (numbers) {
-      const S = meta.s * k, furn = furnishFloor(b, L, meta.floor);
-      // AI output: put our doors back so no doorway can be painted over
-      if (meta.furnished) {
-        const X = v => (v - meta.x0) * S, Y = v => headH + (v - meta.y0) * S, thick = Math.max(4, S * 0.3);
-        for (const d of f.doors) if (d.kind !== 'secret') drawDoor(g, S, X, Y, d, thick);
-        for (const r of f.rooms) for (const q of placeNooks(b, r)) drawDoor(g, S, X, Y, { ...q.door, kind: 'door' }, thick * 0.8);
-      }
-      for (const r of drawn) {
-        const p = furn.get(rkey(r))?.label || { x: r.x + r.w / 2, y: r.y + r.h / 2 };
-        numberBadge(g, (p.x - meta.x0) * S, headH + (p.y - meta.y0) * S, roomNo(r), Math.max(11, Math.min(20, S * 0.42)));
-      }
-    }
     g.textAlign = 'left'; g.textBaseline = 'alphabetic';
     g.fillStyle = '#f0c870'; g.font = '700 14px Georgia, serif'; g.fillText('KEY', 14, img.height + headH + 24);
     g.font = '13px Georgia, serif'; g.fillStyle = '#efe4cf';
@@ -863,5 +848,5 @@ function canvasBlob(c, type = 'image/png', q) { return new Promise((res, rej) =>
 function furnishedFloorCanvas(b, L, fi, px = 56, labels = true) {
   const r = renderFurnished(b, L, fi, { px, labels });
   if (!labels) return r.canvas;
-  return composeFloor(b, L, r.meta, r.canvas, r.width, `${r.meta.floorName} · 1 square = 5 ft`, false);
+  return composeFloor(b, L, r.meta, r.canvas, r.width, `${r.meta.floorName} · 1 square = 5 ft`);
 }

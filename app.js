@@ -1365,13 +1365,12 @@ function lineMapCard(b) {
     <div class="linemap">${renderMapSVG(b, lm.layout)}</div>
     <p class="small muted">Layout #${lm.seed.toString(36)}. Rooms still being built aren't shown until they're finished. "New layout" shuffles the arrangement; the map stays the same until someone redraws it.</p>
     ${aiBox(b)}
-    ${furnishedCard(b)}
-    ${reskinCard(b)}`;
+    ${furnishedCard(b)}`;
 }
 
 // ----- furnished battle map (furnish.js): drawn in code from the facilities, no AI -----
 const furnPrev = { key: '', url: '' };
-const furnUi = { labels: true }; // battle map: draw room numbers, title and key (off = a clean image for a VTT)
+const furnUi = { labels: true, floor: 0 }; // battle map: draw room numbers, title and key (off = a clean image for a VTT)
 function furnishedPreview(b, fi) {
   const key = JSON.stringify([b.id, b.name, b.lineMap.seed, b.lineMap.sig, fi, b.nooks || [], b.walls || {}, b.lineMap.layout.fl.length, furnUi.labels]);
   if (furnPrev.key !== key) {
@@ -1382,96 +1381,16 @@ function furnishedPreview(b, fi) {
   return furnPrev.url;
 }
 function furnishedCard(b) {
-  const L = b.lineMap.layout, fi = Math.min(reskinUi.floor, L.fl.length - 1);
+  const L = b.lineMap.layout, fi = Math.min(furnUi.floor, L.fl.length - 1);
   const url = furnishedPreview(b, fi);
   return `<div class="section-head"><h2>Battle Map</h2>
-      <div class="row">${L.fl.length > 1 ? `<select id="reskinFloor">${L.fl.map((f, i) => `<option value="${i}" ${i === fi ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select>` : ''}
+      <div class="row">${L.fl.length > 1 ? `<select id="furnFloor">${L.fl.map((f, i) => `<option value="${i}" ${i === fi ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select>` : ''}
       <label class="check small" title="Room numbers, secret-door marks, stair labels, title and key. Untick for a clean image to drop into a VTT."><input type="checkbox" id="furnLabels" ${furnUi.labels ? 'checked' : ''}> Labels</label>
       <button class="btn sm ghost" data-act="dlFurn">PNG</button><button class="btn sm" data-act="saveFurn" title="Add a PNG of this floor to the uploaded maps">Save to Maps</button></div></div>
     <div class="card furnished">
       ${url ? `<a href="${url}" target="_blank" rel="noopener"><img src="${url}" alt="Furnished map of ${esc(L.fl[fi].name)}"></a>` : '<p class="muted">Could not draw this floor.</p>'}
       <p class="small muted">Furnished from each room's facility: beds in bedrooms, the forge in the smithy, and so on. Doors, the front entrance and closets come straight from the graph-paper map. Furniture never blocks a door.</p>
     </div>`;
-}
-
-// ----- AI reskin (Supabase queue bb_reskin_jobs, painted by ComfyUI on the DM's laptop) -----
-const RESKIN_STYLES = [['forest', 'Forest grove'], ['dungeon', 'Dungeon'], ['wizard', 'Wizard tower'], ['castle', 'Castle keep'],
-  ['fey', 'Feywild'], ['cavern', 'Cavern'], ['manor', 'Noble manor'], ['ruins', 'Ancient ruins']];
-const reskinJobs = {};      // bastion id -> recent jobs (from the queue table)
-const reskinUi = { style: 'forest', extra: '', floor: 0 };
-let reskinBusy = false, reskinTimer = null;
-const publicUrl = (path) => `${SB_URL}/storage/v1/object/public/${MAP_BUCKET}/${path}`;
-
-function reskinCard(b) {
-  const L = b.lineMap.layout, jobs = reskinJobs[b.id] || [];
-  if (!reskinJobs[b.id]) refreshReskins(b.id);
-  const statusLine = (j) => {
-    if (j.status === 'queued') { const ahead = j.ahead || 0; return `Queued${ahead ? ` — ${ahead} ahead` : ''}. Waiting for the painter (the DM's laptop) to pick it up…`; }
-    if (j.status === 'running') return 'Painting… (under a minute once the painter is warmed up)';
-    if (j.status === 'failed') return `Failed: ${esc(j.error || 'unknown error')}`;
-    return 'Done';
-  };
-  return `<div class="card reskin">
-    <div class="row"><b>Paint it</b> <span class="badge">AI</span><span class="small muted">Restyle the battle map above as a painted scene. Every room keeps its furniture, doors and entrance; room numbers are added back on top.</span></div>
-    <div class="row">
-      <select id="reskinStyle">${RESKIN_STYLES.map(([k, l]) => `<option value="${k}" ${k === reskinUi.style ? 'selected' : ''}>${l}</option>`).join('')}<option value="" ${reskinUi.style === '' ? 'selected' : ''}>Custom only</option></select>
-      <input id="reskinExtra" maxlength="200" placeholder="Extra details (optional), e.g. autumn leaves, blue banners" value="${esc(reskinUi.extra)}">
-      <button class="btn" data-act="reskin" ${reskinBusy ? 'disabled' : ''}>${reskinBusy ? 'Sending…' : 'Paint'}</button>
-    </div>
-    ${jobs.length ? `<div class="reskins">${jobs.map(j => `
-      <div class="rjob ${j.status}" data-job="${j.id}">
-        ${j.status === 'done' ? `<a href="${esc(publicUrl(j.result_path))}" target="_blank" rel="noopener"><img src="${esc(publicUrl(j.result_path))}" alt="" loading="lazy"></a>` : '<div class="rph">🖌️</div>'}
-        <div class="small"><b>${esc(RESKIN_STYLES.find(s => s[0] === j.style)?.[1] || 'Custom')}</b> · ${esc(j.floor_name || '')}</div>
-        <div class="small muted">${statusLine(j)}</div>
-        ${j.status === 'done' ? `<div class="row"><button class="btn xs ghost" data-act="reskinOpen">Open with numbers</button><button class="btn xs" data-act="reskinSave">Save to Maps</button></div>` : ''}
-      </div>`).join('')}</div>` : ''}
-  </div>`;
-}
-
-async function refreshReskins(bid) {
-  try {
-    const r = await fetch(`${SB_URL}/rest/v1/bb_reskin_jobs?bastion_id=eq.${bid}&select=id,floor_name,style,meta,width,height,status,error,result_path,created_at&order=created_at.desc&limit=6`, { headers: { apikey: SB_KEY } });
-    if (!r.ok) return;
-    const jobs = await r.json();
-    const pending = jobs.filter(j => j.status === 'queued');
-    if (pending.length) {
-      const q = await fetch(`${SB_URL}/rest/v1/bb_reskin_jobs?status=in.(queued,running)&select=id,created_at&order=created_at`, { headers: { apikey: SB_KEY } });
-      const all = q.ok ? await q.json() : [];
-      for (const j of pending) j.ahead = all.findIndex(x => x.id === j.id);
-    }
-    reskinJobs[bid] = jobs;
-    clearTimeout(reskinTimer);
-    if (jobs.some(j => j.status === 'queued' || j.status === 'running')) reskinTimer = setTimeout(() => { if (state.activeId === bid && tab === 'maps') refreshReskins(bid); }, 4000);
-    if (state.activeId === bid && tab === 'maps') safeRender();
-  } catch { /* offline: try again on next render */ }
-}
-
-async function startReskin(b) {
-  reskinUi.style = $('#reskinStyle')?.value ?? reskinUi.style;
-  reskinUi.extra = ($('#reskinExtra')?.value || '').trim();
-  reskinUi.floor = +($('#reskinFloor')?.value || 0);
-  if (!reskinUi.style && !reskinUi.extra) { toast('Pick a style or describe one.'); return; }
-  // the AI restyles our furnished render (furnish.js), so furniture, doors and the entrance can't go missing
-  const L = b.lineMap.layout, fr = renderFurnished(b, L, Math.min(reskinUi.floor, L.fl.length - 1), { long: 1024 });
-  const ctrl = { dataUrl: fr.canvas.toDataURL('image/jpeg', 0.92), width: fr.width, height: fr.height, meta: fr.meta };
-  reskinBusy = true; render();
-  try {
-    const r = await fetch(`${SB_URL}/functions/v1/bb-reskin`, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB_KEY },
-      body: JSON.stringify({ action: 'enqueue', campaign: CAMPAIGN, bastionId: b.id, floor: ctrl.meta.floorName, style: reskinUi.style,
-        extra: reskinUi.extra, control: ctrl.dataUrl, width: ctrl.width, height: ctrl.height, meta: ctrl.meta }) });
-    const out = await r.json().catch(() => ({}));
-    if (!r.ok) { toast(out.message || `Couldn't queue the reskin (${r.status}).`); return; }
-    addLog(b, `Reskin requested: ${RESKIN_STYLES.find(s => s[0] === reskinUi.style)?.[1] || 'custom'} (${ctrl.meta.floorName}).`, 'build'); save();
-    toast('Queued! It usually takes a minute or two.');
-    await refreshReskins(b.id);
-  } catch { toast('Could not reach the painter. Check your connection.'); }
-  finally { reskinBusy = false; render(); }
-}
-
-async function reskinOutput(b, jobId) {
-  const j = (reskinJobs[b.id] || []).find(x => x.id === jobId);
-  if (!j || j.status !== 'done') throw new Error('Not ready yet');
-  return composeReskin(b, b.lineMap.layout, j, publicUrl(j.result_path));
 }
 
 // ----- AI layout guidance (Supabase edge function bb-layout -> Claude) -----
@@ -1598,15 +1517,6 @@ document.addEventListener('click', (e) => {
       (b.nooks ||= []).push({ id: uid(), kind: $('#nookKind').value, label: '', squares: sq, parent });
       commit(); return;
     }
-    case 'reskin': startReskin(b); return;
-    case 'reskinOpen': case 'reskinSave': {
-      const id = el.closest('[data-job]').dataset.job, act = el.dataset.act;
-      reskinOutput(b, id).then(bl => {
-        if (act === 'reskinOpen') window.open(URL.createObjectURL(bl), '_blank');
-        else uploadMapFiles([new File([bl], `${(b.name || 'bastion').replace(/[^\w\- ]+/g, '').trim() || 'bastion'} painted.png`, { type: 'image/png' })]);
-      }).catch(err => toast(err.message));
-      return;
-    }
     case 'aiLayout': askArchitect(b); return;
     case 'clearPlan':
       if (confirm('Forget the architect\'s plan and go back to the automatic layout?')) { delete b.lineMap.plan; delete b.lineMap.request; drawLineMap(b, b.lineMap.seed, b.lineMap.floors); commit(); }
@@ -1616,7 +1526,7 @@ document.addEventListener('click', (e) => {
     case 'updateMap': drawLineMap(b, b.lineMap.seed, b.lineMap.floors); commit(); return;
     case 'dlMapSvg': downloadBlob(new Blob([renderMapSVG(b, b.lineMap.layout)], { type: 'image/svg+xml' }), mapFileName(b, 'svg')); return;
     case 'dlFurn': case 'saveFurn': {
-      const fi = Math.min(reskinUi.floor, b.lineMap.layout.fl.length - 1), name = mapFileName(b, 'png').replace(/\.png$/, `-${b.lineMap.layout.fl[fi].name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}${furnUi.labels ? '' : '-unlabelled'}-battlemap.png`);
+      const fi = Math.min(furnUi.floor, b.lineMap.layout.fl.length - 1), name = mapFileName(b, 'png').replace(/\.png$/, `-${b.lineMap.layout.fl[fi].name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}${furnUi.labels ? '' : '-unlabelled'}-battlemap.png`);
       canvasBlob(furnishedFloorCanvas(b, b.lineMap.layout, fi, 70, furnUi.labels)).then(bl => el.dataset.act === 'dlFurn' ? downloadBlob(bl, name) : uploadMapFiles([new File([bl], name, { type: 'image/png' })])).catch(err => toast(err.message));
       return;
     }
@@ -1709,10 +1619,8 @@ document.addEventListener('change', (e) => {
   if (el.id === 'importInput') return importFile(el);
   if (el.id === 'mapUpload') return uploadMaps(el);
   if (el.id === 'aiLayout') { aiDraft[b.id] = el.value; return; }
-  if (el.id === 'reskinStyle') { reskinUi.style = el.value; return; }
-  if (el.id === 'reskinExtra') { reskinUi.extra = el.value; return; }
   if (el.id === 'furnLabels') { furnUi.labels = el.checked; render(); return; }
-  if (el.id === 'reskinFloor') { reskinUi.floor = +el.value; render(); return; }
+  if (el.id === 'furnFloor') { furnUi.floor = +el.value; render(); return; }
   if (el.dataset.nookField) {
     const n = (b.nooks || []).find(x => x.id === el.closest('[data-nook]').dataset.nook); if (!n) return;
     const k = el.dataset.nookField;

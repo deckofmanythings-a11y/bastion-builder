@@ -1,3 +1,5 @@
+-- RETIRED 2026-11-18: the AI "Paint it" feature was removed (results never matched the layouts). Kept as a record
+-- of what exists in the database; nothing in the app reads or writes bb_reskin_jobs any more.
 -- AI map reskins: a job queue the Foundry laptop's worker drains (supabase/functions/bb-reskin).
 -- Browsers may read job status (no ip_hash); only the edge function (service role) writes.
 

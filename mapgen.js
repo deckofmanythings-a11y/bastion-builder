@@ -655,46 +655,9 @@ function placeNooks(b, r) {
   return out;
 }
 
-// ---------------- AI reskin helpers ----------------
-// Control image for the ControlNet: one floor, white lines on black, no text or grid.
+// ---------------- floor geometry (shared with the battle map) ----------------
 function floorGeometry(b, L, fi) {
   const f = L.fl[fi];
   const hasWalls = fi === 0 && ((b.walls?.built || 0) > 0 || b.walls?.enclosed);
   return { f, box: floorBox(f, hasWalls, fi ? groundShell(L) : []) };
-}
-function renderControlPNG(b, L, fi, long = 1024) {
-  const { f, box } = floorGeometry(b, L, fi);
-  const bw = box.x1 - box.x0, bh = box.y1 - box.y0;
-  const s = long / Math.max(bw, bh);
-  const W = Math.round(bw * s / 8) * 8, H = Math.round(bh * s / 8) * 8;
-  const c = document.createElement('canvas'); c.width = W; c.height = H;
-  const g = c.getContext('2d');
-  g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
-  const X = v => (v - box.x0) * s, Y = v => (v - box.y0) * s;
-  g.strokeStyle = '#fff'; g.lineCap = 'square'; g.lineJoin = 'miter';
-  const nooks = f.rooms.flatMap(r => placeNooks(b, r));
-  g.lineWidth = Math.max(3, s * 0.22);
-  g.stroke(new Path2D(wallPath(f, X, Y, nooks)));
-  g.lineWidth = Math.max(2, s * 0.12);
-  for (const r of f.plots) g.strokeRect(X(r.x), Y(r.y), r.w * s, r.h * s);
-  if (f.stairs) {
-    const m = stairMarks(f.stairs); g.beginPath();
-    for (const l of [...m.treads, ...m.rails]) { g.moveTo(X(l[0]), Y(l[1])); g.lineTo(X(l[2]), Y(l[3])); }
-    for (const r of m.rings) { g.moveTo(X(r.x) + r.r * s, Y(r.y)); g.arc(X(r.x), Y(r.y), r.r * s, 0, 7); }
-    g.lineWidth = Math.max(1, s * 0.06); g.stroke();
-  }
-  if (box.wall) {
-    const w = box.wall; g.lineWidth = Math.max(4, s * 0.45); g.beginPath();
-    [[1, w.y1], [w.x1, w.y1], [w.x1, w.y0], [w.x0, w.y0], [w.x0, w.y1], [-1, w.y1]].forEach(([a, c2], i) => (i ? g.lineTo(X(a), Y(c2)) : g.moveTo(X(a), Y(c2))));
-    g.stroke();
-  }
-  return { dataUrl: c.toDataURL('image/png'), width: W, height: H, meta: { floor: fi, floorName: f.name, seed: L.seed, sig: L.sig, s, x0: box.x0, y0: box.y0 } };
-}
-
-// Paint the room numbers, title and a key back onto an AI-painted floor (AI text is unreadable, ours isn't).
-async function composeReskin(b, L, job, imgUrl) {
-  const img = await new Promise((res, rej) => { const i = new Image(); i.crossOrigin = 'anonymous'; i.onload = () => res(i); i.onerror = () => rej(new Error('Could not load the painted map')); i.src = imgUrl; });
-  const m = job.meta || {};
-  const c = composeFloor(b, L, m, img, job.width, `${m.floorName || ''} · ${job.style === 'custom' ? 'custom style' : job.style} · 1 square = 5 ft`, true);
-  return canvasBlob(c);
 }

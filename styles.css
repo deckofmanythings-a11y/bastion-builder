@@ -304,16 +304,6 @@ dialog h4 { margin: 1rem 0 .4rem; color: var(--gold); }
 .shape-name { min-width: 14em; flex: 1; }
 .nookrow.add { border-top: 1px dashed var(--line); padding-top: .5rem; }
 
-/* ----- AI reskin ----- */
-.reskin { margin-top: .8rem; display: flex; flex-direction: column; gap: .5rem; }
-.reskin .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
-.reskin #reskinExtra { flex: 1; min-width: 14em; background: var(--bg2); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: .35em .55em; font: inherit; }
-.reskins { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: .6rem; }
-.rjob { border: 1px solid var(--line); border-radius: 8px; padding: .45rem; display: flex; flex-direction: column; gap: .3rem; background: var(--bg2); }
-.rjob img, .rjob .rph { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 2rem; background: #000; }
-.rjob.failed { border-color: var(--red); }
-.rjob.running .rph { animation: pulse 1.4s ease-in-out infinite; }
-@keyframes pulse { 50% { opacity: .45; } }
 .card.furnished img { display: block; width: 100%; height: auto; border-radius: 6px; }
 
 .exact-name { text-transform: none; letter-spacing: 0; color: var(--gold2); font-size: 1.05em; }
