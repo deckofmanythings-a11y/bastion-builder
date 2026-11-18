@@ -65,7 +65,12 @@ const SYSTEM = `You plan floor layouts for D&D 2024 Bastions (player strongholds
 - Each floor has one straight central hall running east-west. On the entrance floor (level 0) the front door opens
   from a foyer in the middle of the hall's south side. Stairs (when there are several floors) sit opposite the foyer.
 - Rooms line both sides of the hall. "east" and "west" are the two wings, each listed from the middle (near the
-  foyer and stairs) outward to the far end. The program picks north/south sides to keep the building compact.
+  foyer and stairs) outward to the far end. The program picks north/south sides to keep the building compact,
+  unless you pin a room with "sides".
+- "sides" pins a room to the north or south side of the hall. Pin only when it matters (the player asked, or rooms
+  must face each other). To put two groups "across the hall" from each other, list both groups in the SAME wing and
+  pin one group north and the other south; they then start from the middle together and face each other. Rooms of a
+  pair must share a side. The foyer (entrance floor) is on the south side in the middle; stairs are on the north.
 - EVERY room always gets its own door onto the hall, so nobody has to walk through one room to reach another.
   You cannot remove that; you can only add extra connecting doors between neighbouring rooms ("pairs" with door).
 - "pairs" keeps two rooms side by side in the same wing (the program puts them next to each other); list a pair's
@@ -87,7 +92,7 @@ or "" if nothing to add. Floor "name" is a short label like "Ground Floor", "Tow
 
 const SCHEMA = {
   type: "object", additionalProperties: false,
-  required: ["summary", "notes", "floors", "outdoor", "pairs", "secret"],
+  required: ["summary", "notes", "floors", "outdoor", "pairs", "secret", "sides"],
   properties: {
     summary: { type: "string" },
     notes: { type: "string" },
@@ -110,6 +115,13 @@ const SCHEMA = {
       },
     },
     secret: { type: "array", items: { type: "string" } },
+    sides: {
+      type: "array",
+      items: {
+        type: "object", additionalProperties: false, required: ["ref", "side"],
+        properties: { ref: { type: "string" }, side: { type: "string", enum: ["north", "south"] } },
+      },
+    },
   },
 };
 
@@ -150,6 +162,8 @@ function clean(plan: any, rooms: Room[]) {
     pairs: (Array.isArray(plan.pairs) ? plan.pairs : []).filter((p: any) => known.has(p?.a) && known.has(p?.b) && p.a !== p.b)
       .slice(0, 30).map((p: any) => ({ a: p.a, b: p.b, door: !!p.door })),
     secret: (Array.isArray(plan.secret) ? plan.secret : []).filter((r: any) => known.has(r)).slice(0, 30),
+    sides: (Array.isArray(plan.sides) ? plan.sides : []).filter((x: any) => known.has(x?.ref) && (x.side === "north" || x.side === "south"))
+      .slice(0, 60).map((x: any) => ({ ref: x.ref, side: x.side })),
   };
 }
 

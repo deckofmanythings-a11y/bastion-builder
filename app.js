@@ -1423,7 +1423,7 @@ async function askArchitect(b) {
     const r = await fetch(`${SB_URL}/functions/v1/bb-layout`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB_KEY },
       body: JSON.stringify({ campaign: CAMPAIGN, bastionId: bid, request: text, rooms,
-        current: plan ? { floors: plan.floors, outdoor: plan.outdoor, pairs: plan.pairs, secret: plan.secret } : null,
+        current: plan ? { floors: plan.floors, outdoor: plan.outdoor, pairs: plan.pairs, secret: plan.secret, sides: plan.sides || [] } : null,
         bastion: { name: b.name, walls } }),
     });
     const out = await r.json().catch(() => ({}));

@@ -244,13 +244,14 @@ function planFloors(rooms, plan, rng) {
   for (const f of pf) { // ground floor first, so the others can be fitted into its outline
     const up = levels.some(l => l > f.level), dn = levels.some(l => l < f.level);
     fl.push(buildFloor(f.name, null, rng, { foyer: f.level === 0, stairs: up && dn ? 'UP/DN' : up ? 'UP' : dn ? 'DN' : null, level: f.level,
-      wings: { east: f.east, west: f.west }, pairs: plan.pairs || [], secret: new Set(plan.secret || []), fit: f.level === 0 ? null : groundFit(fl[0]) }));
+      wings: { east: f.east, west: f.west }, pairs: plan.pairs || [], secret: new Set(plan.secret || []),
+      pins: new Map((plan.sides || []).map(x => [x.ref, x.side === 'south' ? 'S' : 'N'])), fit: f.level === 0 ? null : groundFit(fl[0]) }));
   }
   addYard(fl[0], outdoor, rng);
   return [fl, rooms.filter(r => r.zone === 'demi')];
 }
 
-function buildFloor(name, rooms, rng, { foyer, stairs, level = 0, wings = null, pairs = [], secret = new Set(), fit = null }) {
+function buildFloor(name, rooms, rng, { foyer, stairs, level = 0, wings = null, pairs = [], secret = new Set(), fit = null, pins = new Map() }) {
   // a split facility becomes separate rooms, each placed on its own (they needn't be neighbours)
   const size = r => {
     const parts = roomDims(r, rng, MAP_DIMS);
@@ -266,6 +267,8 @@ function buildFloor(name, rooms, rng, { foyer, stairs, level = 0, wings = null, 
       return out;
     };
     east = blocks(wings.east); west = blocks(wings.west);
+    // the architect can pin a room to the north or south side of the hall; a block follows its first pinned room
+    for (const blk of [...east, ...west]) { const r = blk.find(q => pins.has(q.ref)); if (r) blk.pin = pins.get(r.ref); }
     doorPairs = pairs.filter(p => p.door).map(p => [p.a, p.b]);
   } else {
     [east, west, doorPairs] = zoneWings(rooms.flatMap(size), rng);
@@ -358,7 +361,7 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
     for (const blk of [...blocks.filter(hasL), ...blocks.filter(x => !hasL(x))]) {
       if (taken.has(blk)) continue;
       taken.add(blk); // placed: no longer available to fill a notch
-      const s = side.N < side.S || (side.N === side.S && rng() < 0.5) ? 'N' : 'S';
+      const s = blk.pin || (side.N < side.S || (side.N === side.S && rng() < 0.5) ? 'N' : 'S');
       place(blk, s, dir);
     }
   };
@@ -401,7 +404,7 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
     for (const blk of [...east, ...west].sort((a, c) => hasL(c) - hasL(a) || bw(c) - bw(a))) {
       if (taken.has(blk)) continue;
       taken.add(blk);
-      const c = choose(blk, ['nE', 'sE', 'nW', 'sW']);
+      const c = choose(blk, blk.pin === 'N' ? ['nE', 'nW'] : blk.pin === 'S' ? ['sE', 'sW'] : ['nE', 'sE', 'nW', 'sW']);
       place(c.v, c.q[0].toUpperCase(), c.q[1] === 'E' ? 1 : -1);
     }
   } else {
@@ -593,7 +596,13 @@ function renderMapSVG(b, L) {
     for (const r of f.plots) roomText(out, b, r, X(r.x + r.w / 2), Y(r.y + r.h / 2), r.w, r.h, e);
     for (const r of f.rooms) {
       const D = Math.max(0, ...nooks.filter(k => k.n.parent === r.ref).map(k => k.h));
-      if (r.cut) { const q = roomRects(r).find(q => q.w === r.w); roomText(out, b, r, X(q.x + q.w / 2), Y(q.y + q.h / 2), q.w, q.h, e); continue; }
+      if (r.cut) {
+        // label in the full-width piece, clear of the closets along its back wall (or the narrow piece if that's full)
+        const rs = roomRects(r), q = rs.find(z => z.w === r.w), back = r.side === 'S' ? q.y + q.h === r.y + r.h : q.y === r.y;
+        const d = back ? D : 0, qy = r.side === 'S' ? q.y : q.y + d, qh = q.h - d;
+        const z = qh >= 1 ? { x: q.x, y: qy, w: q.w, h: qh } : rs.find(t => t !== q);
+        roomText(out, b, r, X(z.x + z.w / 2), Y(z.y + z.h / 2), z.w, z.h, e); continue;
+      }
       const fy = r.side === 'S' ? r.y : r.y + D, fh = r.h - D;
       roomText(out, b, r, X(r.x + r.w / 2), Y(fy + fh / 2), r.w, fh, e);
     }
