@@ -262,7 +262,7 @@ function totalDefenders(b) {
   let n = b.extraDefenders || 0;
   for (const f of b.specials) {
     if (f.key === 'barrack') n += f.defenders || 0;
-    if (f.key === 'menagerie') n += (f.creatures || []).filter(c => c.defender).length;
+    if (f.creatures) n += f.creatures.filter(c => c.defender).length;
   }
   return n;
 }
@@ -272,10 +272,12 @@ function facName(f) { return f.nickname ? `${f.nickname} (${DEF[f.key].name})` :
 function meetsPrereq(b, p) {
   if (!p) return true;
   const q = b.prereqs || {};
-  if (p === 'focus') return !!(q.focus || q.arcane || q.divine);
+  if (p === 'focus') return !!(q.focus || q.arcane || q.divine || q.toolsFocus);
   return !!q[p];
 }
 function eligibility(b, def) {
+  if (def.eberron && !b.eberron) return 'Turn on the Eberron option first';
+  if (def.mobileOnly && !b.mobile) return 'Needs a mobile Bastion (Eberron option)';
   if (b.level < def.level) return `Requires level ${def.level}`;
   if (!meetsPrereq(b, def.prereq)) return `Requires: ${PREREQS[def.prereq]}`;
   if (!def.multiple && hasFacility(b, def.key)) return 'Already in your Bastion';
@@ -302,7 +304,10 @@ function makeSpecial(key) {
   if (def.options?.trainer) f.options.trainer = Object.keys(TRAINERS)[0];
   if (def.options?.tools) f.options.tools = ARTISAN_TOOLS.slice(0, 6);
   if (key === 'barrack') f.defenders = 0;
-  if (key === 'menagerie') f.creatures = [];
+  if (key === 'menagerie' || key === 'construct-forge') f.creatures = [];
+  if (def.options?.house) f.options.house = DRAGONMARKED_HOUSES[0];
+  if (def.options?.plane) f.options.plane = Object.keys(MANIFEST_PLANES)[0];
+  if (def.options?.origins) f.options.origins = [Object.keys(MUSEUM_ORIGINS)[0]];
   if (key === 'war-room') f.lieutenants = 0;
   syncHirelings(f);
   return f;
@@ -329,7 +334,7 @@ function loseDefenders(b, n) {
   const barracks = b.specials.filter(f => f.key === 'barrack').sort((a, c) => (c.defenders || 0) - (a.defenders || 0));
   for (const f of barracks) { const k = Math.min(left, f.defenders || 0); if (k) { f.defenders -= k; left -= k; parts.push(`${k} from ${facName(f)}`); } }
   if (left && b.extraDefenders) { const k = Math.min(left, b.extraDefenders); b.extraDefenders -= k; left -= k; parts.push(`${k} other`); }
-  for (const f of b.specials.filter(x => x.key === 'menagerie')) {
+  for (const f of b.specials.filter(x => x.creatures)) {
     for (const c of f.creatures.filter(c => c.defender)) { if (!left) break; f.creatures.splice(f.creatures.indexOf(c), 1); left--; parts.push(c.name); }
   }
   return parts.join(', ');
@@ -397,10 +402,16 @@ function takeTurn() {
     addLog(b, `${facName(p.f)}: ${DEF[p.f.key].order} — ${p.opt.label}${orderSummary(p.opt, p.d)} (${days} days).`);
   }
 
+  const travel = plan.filter(p => p.opt.effect === 'travel');
+  if (travel.length) {
+    b.travelling = true;
+    for (const f of b.specials) if (f.key === 'inquisitive-agency' || f.key === 'manifest-zone') f.needsNetwork = true;
+    addLog(b, `The Bastion sets off${travel[0].d.topic ? ` for ${travel[0].d.topic}` : ''}. Issuing Travel means the DM rolls a Bastion event, as with Maintain.`, 'event');
+  }
   advanceDays(b, b.turnLength);
   b.turn = T;
   b.draft = {};
-  if (maintain) rollEvent(b);
+  if (maintain || travel.length) rollEvent(b);
   commit();
   toast(`Bastion turn ${T} complete.`);
 }
@@ -502,6 +513,19 @@ function completeOrder(b, f) {
       f.creatures.push({ id: uid(), name: c.name, size: c.size, defender: true });
       note(`${c.name} added to the Menagerie (counts as a Bastion Defender).`); break;
     }
+    case 'favor': f.favorUsed = true; note(`House ${f.options.house || ''} grants a favor your Renown allows (not counted against your usual favors).`); break;
+    case 'network': f.needsNetwork = false; note('The new network of contacts and agents is in place.'); break;
+    case 'relink': f.needsNetwork = false; note(`Planar link to ${f.options.plane} re-established.`); break;
+    case 'construct': {
+      const c = FORGE_CONSTRUCTS.find(x => x.name === d.choice) || { name: d.choice || 'Construct' };
+      (f.creatures ||= []).push({ id: uid(), name: c.name, size: '', defender: true });
+      note(`${c.name} built (counts as a Bastion Defender).`); break;
+    }
+    case 'travel': {
+      note(`The Bastion travelled toward ${d.topic || 'its destination'} this turn (8 hours a day; it stops early on arrival or if something stops it).`);
+      if (!b.specials.some(x => x !== f && x.order && DEF[x.key].orders.find(o2 => o2.id === x.order.optId)?.effect === 'travel')) b.travelling = false;
+      break;
+    }
     case 'lieutenant': f.lieutenants = (f.lieutenants || 0) + 1; syncHirelings(f); note(`Lieutenant recruited (${f.lieutenants}/10).`); break;
     case 'trade': {
       const net = Number(d.net) || 0;
@@ -548,7 +572,7 @@ function resolveEvent(b, r, { reroll = false } = {}) {
         b.guestMonster = null;
       } else {
         const had = totalDefenders(b);
-        const walls = b.walls.enclosed && b.walls.built > 0;
+        const walls = !b.mobile && b.walls.enclosed && b.walls.built > 0;
         const count = 6 - (walls ? 2 : 0);
         const sides = b.armoryStocked ? 8 : 6;
         const dice = rollDice(count, sides);
@@ -711,9 +735,10 @@ function sideView(b) {
         const open = prereqOpen[b.id] ?? n === 0; // user's choice wins; default open until something is ticked
         return `<details class="prereqs" data-prereq-panel ${open ? 'open' : ''}>
         <summary>Facility prerequisites <small>${n ? `${n} selected` : 'none selected'}</small></summary>
-        ${Object.entries(PREREQS).map(([k, t]) => `<label class="check prereq-opt ${b.prereqs?.[k] ? 'on' : ''}"><input type="checkbox" data-prereq="${k}" ${b.prereqs?.[k] ? 'checked' : ''}><span>${t}</span></label>`).join('')}
+        ${Object.entries(PREREQS).filter(([k]) => b.eberron || !(k in EBERRON_PREREQS)).map(([k, t]) => `<label class="check prereq-opt ${b.prereqs?.[k] ? 'on' : ''}"><input type="checkbox" data-prereq="${k}" ${b.prereqs?.[k] ? 'checked' : ''}><span>${t}</span></label>`).join('')}
       </details>`;
       })()}
+      ${eberronBox(b)}
     </div>
     <div class="card treasury">
       <div class="label">Treasury</div>
@@ -779,7 +804,7 @@ function facilitiesView(b) {
     ${shapesCard(b)}
 
     <div class="section-head"><h2>Defensive Walls</h2></div>
-    <div class="card walls">
+    ${b.mobile ? '<div class="card walls"><p>A mobile Bastion can\'t have defensive walls (Eberron rules), so attacks always roll the full dice.</p></div>' : `<div class="card walls">
       <p>20-ft walls with a walkway. Each 5-ft square costs ${gp(WALL.costPerSquare)} and takes ${WALL.daysPerSquare} days. If the Bastion is <b>completely enclosed</b>, attacks roll 2 fewer dice for defender losses.</p>
       <div class="row">
         <span>Built: <b>${b.walls.built}</b> squares</span>
@@ -787,7 +812,7 @@ function facilitiesView(b) {
         <label class="check"><input type="checkbox" data-act="enclosed" ${b.walls.enclosed ? 'checked' : ''}> Completely enclosed</label>
       </div>
       ${b.walls.building ? '' : `<div class="row"><input id="wallSq" type="number" min="1" value="4" style="width:6em"> squares <button class="btn sm" data-act="buildWalls">Build walls</button></div>`}
-    </div>`;
+    </div>`}`;
 }
 
 function specialCard(b, f) {
@@ -838,6 +863,22 @@ function upgradeBlock(f) {
     <button class="btn sm" data-act="enlargeSpecial">Enlarge for ${gp(e.cost)}</button></div>`;
 }
 
+const HELMS = ['lyrandar-helm', 'navigators-helm', 'orien-helm'];
+function eberronBox(b) {
+  const ebf = b.specials.filter(f => DEF[f.key]?.eberron);
+  const helms = b.specials.filter(f => HELMS.includes(f.key));
+  return `<div class="eberron ${b.eberron ? 'on' : ''}">
+    <label class="check"><input type="checkbox" data-act="eberron" ${b.eberron ? 'checked' : ''}> <b>Eberron rules</b> <span class="badge">${esc(EBERRON_SOURCE)}</span></label>
+    <p class="small">Adds Bastion rules and 10 special facilities from the <i>Eberron</i> campaign setting (mobile Bastions, the helms, Dragonmark Outpost, Kundarak Vault, Manifest Zone, Museum, Artificer's and Construct Forges, Inquisitive Agency). <b>Check with your DM that Eberron content is allowed before turning this on.</b></p>
+    ${b.eberron ? `
+      <label class="check"><input type="checkbox" data-act="mobile" ${b.mobile ? 'checked' : ''}> Mobile Bastion (built inside a vehicle)</label>
+      ${b.mobile ? `<label class="field"><span>Vehicle</span><input data-mobile-vehicle value="${esc(b.mobile.vehicle || '')}" placeholder="e.g. sailing ship, Lightning Rail cart, elemental airship"></label>
+        <p class="small">A mobile Bastion needs a propulsion facility: Lyrandar Helm (elemental airship or galleon), Navigator's Helm (ordinary ship or boat) or Orien Helm (Lightning Rail cart).${helms.length ? '' : ' <b>This one has none yet.</b>'} Travel moves it 8 hours a day for the Bastion turn and makes the DM roll a Bastion event. It can't have defensive walls, and facilities may be a little bigger or smaller to fit the vehicle (DM's call). If several characters combine Bastions in one vehicle, each needs the same kind of helm and all must order Travel together; hirelings then work in 8-hour shifts, so three helms can travel 24 hours a day. Encounters on the way can cut off facilities, including the helm.</p>
+        ${b.travelling ? '<p class="pill build">Travelling this turn</p>' : ''}` : ''}
+      ${ebf.length ? `<p class="small muted">Eberron facilities here: ${ebf.map(f => esc(facName(f))).join(', ')}.</p>` : ''}` : ''}
+  </div>`;
+}
+
 function facilityOptions(b, f) {
   const def = DEF[f.key]; const o = def.options || {}; const out = [];
   if (o.garden) {
@@ -874,6 +915,22 @@ function facilityOptions(b, f) {
   if (o.trainer) {
     out.push(`<label class="field"><span>Expert trainer</span><select data-opt="trainer">${Object.keys(TRAINERS).map(t => `<option ${t === f.options.trainer ? 'selected' : ''}>${t}</option>`).join('')}</select></label><p class="small">Benefit: ${esc(TRAINERS[f.options.trainer])}.</p>`);
   }
+  if (o.house) {
+    out.push(`<label class="field"><span>Dragonmarked house</span><select data-opt="house">${DRAGONMARKED_HOUSES.map(h => `<option ${h === f.options.house ? 'selected' : ''}>${h}</option>`).join('')}</select></label>`);
+    if (f.favorUsed) out.push(`<p class="small">House Favor used. <button class="btn xs ghost" data-act="favorReset">My Renown with the house went up</button></p>`);
+  }
+  if (o.plane) {
+    out.push(`<label class="field"><span>Linked plane</span><select data-opt="plane">${Object.keys(MANIFEST_PLANES).map(t => `<option ${t === f.options.plane ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label><p class="small">Manifest Charm: ${esc(MANIFEST_PLANES[f.options.plane])}.${f.needsNetwork ? ' <b>Link suspended:</b> the Bastion has moved; re-establish it (7 days).' : ''}</p>`);
+  }
+  if (o.origins) {
+    const n = f.enlarged ? 2 : 1;
+    for (let i = 0; i < n; i++) {
+      const cur = f.options.origins[i] || Object.keys(MUSEUM_ORIGINS)[i] || Object.keys(MUSEUM_ORIGINS)[0];
+      out.push(`<label class="field"><span>Treasure on display ${n > 1 ? i + 1 : ''}</span><select data-opt="origins" data-idx="${i}">${Object.keys(MUSEUM_ORIGINS).map(t => `<option ${t === cur ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label><p class="small">Charm of ${esc(cur)}: while you have it, ${esc(MUSEUM_ORIGINS[cur])}.</p>`);
+    }
+    if (n > 1 && f.options.origins[0] === f.options.origins[1]) out.push('<p class="warn small">The two treasures must have different origins.</p>');
+  }
+  if (DEF[f.key].key === 'inquisitive-agency' && f.needsNetwork) out.push('<p class="small"><b>Network needed:</b> the Bastion has moved, so the secretary must spend 7 days building a new one.</p>');
   if (o.tools) {
     const n = f.enlarged ? 9 : 6;
     out.push(`<div class="field"><span>Artisan's tools (${f.options.tools.length}/${n})</span><div class="chips">${ARTISAN_TOOLS.map(t => `<label class="chip ${f.options.tools.includes(t) ? 'on' : ''}"><input type="checkbox" data-tool="${esc(t)}" ${f.options.tools.includes(t) ? 'checked' : ''}>${esc(t)}</label>`).join('')}</div></div>`);
@@ -891,6 +948,12 @@ function facilityExtras(b, f) {
       ${(f.creatures || []).map(c => `<div class="creature"><span>${esc(c.name)} <small>${c.size}</small></span>
         <label class="check"><input type="checkbox" data-creature-def="${c.id}" ${c.defender ? 'checked' : ''}> Defender</label>
         <button class="btn xs ghost danger" data-creature-del="${c.id}">✕</button></div>`).join('') || '<p class="small">Use the Recruit order to add creatures.</p>'}</div>`;
+  }
+  if (f.key === 'construct-forge') {
+    return `<div class="creatures"><span class="label">Constructs</span>
+      ${(f.creatures || []).map(c => `<div class="creature"><span>${esc(c.name)}</span>
+        <label class="check" title="Untick to let it act by its own nature; it then can't defend the Bastion"><input type="checkbox" data-creature-def="${c.id}" ${c.defender ? 'checked' : ''}> Defender</label>
+        <button class="btn xs ghost danger" data-creature-del="${c.id}">✕</button></div>`).join('') || '<p class="small">Use the Recruit order to build Constructs.</p>'}</div>`;
   }
   if (f.key === 'war-room') {
     return `<div class="counter"><span class="label">Lieutenants</span><button class="btn sm ghost" data-act="lt-">−</button><b>${f.lieutenants || 0} / 10</b><button class="btn sm ghost" data-act="lt+">+</button></div>`;
@@ -1015,7 +1078,7 @@ function eventPanel(b) {
 // ----- stash tab -----
 function stashView(b) {
   const barracks = b.specials.filter(f => f.key === 'barrack');
-  const menag = b.specials.filter(f => f.key === 'menagerie');
+  const menag = b.specials.filter(f => f.creatures);
   return `
     <div class="section-head"><h2>Bastion Stash</h2></div>
     <p class="hint">Crafted and harvested goods stay in your Bastion until you claim them.</p>
@@ -1025,7 +1088,7 @@ function stashView(b) {
     <div class="section-head"><h2>Bastion Defenders <small>${totalDefenders(b)} total</small></h2></div>
     <div class="card">
       ${barracks.map(f => `<div class="drow"><span>${esc(facName(f))}</span><b>${f.defenders || 0} / ${barrackCap(f)}</b></div>`).join('')}
-      ${menag.map(f => `<div class="drow"><span>${esc(facName(f))} creatures</span><b>${f.creatures.filter(c => c.defender).length}</b></div>`).join('')}
+      ${menag.map(f => `<div class="drow"><span>${esc(facName(f))} ${f.key === 'construct-forge' ? 'constructs' : 'creatures'}</span><b>${f.creatures.filter(c => c.defender).length}</b></div>`).join('')}
       <div class="drow"><span>Other defenders (guests, mercenaries…)</span><span><button class="btn xs ghost" data-act="extra-">−</button> <b>${b.extraDefenders}</b> <button class="btn xs ghost" data-act="extra+">+</button></span></div>
       ${b.guestMonster != null ? `<div class="drow"><span>Monster guest <input class="inl" data-guest-monster value="${esc(b.guestMonster)}" title="Name it with your DM"></span><span class="small">defends the next attack (no defenders lost), then leaves <button class="btn xs ghost" data-act="sendMonster">Send away</button></span></div>` : ''}
       ${b.refugees ? `<div class="drow"><span>Refugees sheltering here</span><span><b>${b.refugees.n}</b> <button class="btn xs ghost" data-act="rehomeRefugees" title="They stay until you find them a new home or the Bastion is attacked">Found them a new home</button></span></div>` : ''}
@@ -1478,10 +1541,10 @@ function logView(b) {
 function openPicker() {
   const b = B();
   const groups = [5, 9, 13, 17].map(lv => {
-    const items = FACILITIES.filter(f => f.level === lv).map(def => {
+    const items = FACILITIES.filter(f => f.level === lv && (!f.eberron || b.eberron)).map(def => {
       const why = eligibility(b, def);
       return `<button class="pick ${why ? 'no' : ''}" data-pick="${def.key}" ${why ? 'disabled' : ''}>
-        <span class="pname">${esc(def.name)} <span class="badge ord ord-${def.order.toLowerCase()}">${def.order}</span></span>
+        <span class="pname">${esc(def.name)} <span class="badge ord ord-${def.order.toLowerCase()}">${def.order}</span>${def.eberron ? ' <span class="badge eb">Eberron</span>' : ''}</span>
         <span class="pmeta">${def.space} · ${def.hirelings} hireling${def.hirelings > 1 ? 's' : ''}${def.prereq ? ` · ${esc(PREREQS[def.prereq])}` : ''}${def.multiple ? ' · can take more than once' : ''}</span>
         <span class="pdesc">${esc(def.desc)}</span>
         ${why ? `<span class="pwhy">${esc(why)}</span>` : ''}
@@ -1514,7 +1577,9 @@ document.addEventListener('click', (e) => {
   if (el.dataset.mode) { b.mode = el.dataset.mode; commit(); return; }
   if (el.dataset.pick) {
     const f = makeSpecial(el.dataset.pick); f.addedTurn = b.turn; b.specials.push(f);
-    addLog(b, `${DEF[f.key].name} added to the Bastion.`, 'build'); closeModal(); commit(); return;
+    addLog(b, `${DEF[f.key].name} added to the Bastion.`, 'build');
+    if (f.key === 'dragonmark-outpost') addLog(b, `Your Renown with House ${f.options.house} goes up by 1 (Dragonmark Outpost).`, 'build');
+    closeModal(); commit(); return;
   }
   if (el.dataset.evAct) { eventAction(el.dataset.evAct); return; }
   if (el.dataset.pickEvent) { b.pendingEvent = null; resolveEvent(b, Number(el.dataset.pickEvent)); commit(); return; }
@@ -1581,6 +1646,7 @@ document.addEventListener('click', (e) => {
     case 'lt+': f.lieutenants = Math.min(10, (f.lieutenants || 0) + 1); commit(); break;
     case 'lt-': f.lieutenants = Math.max(0, (f.lieutenants || 0) - 1); commit(); break;
     case 'extra+': b.extraDefenders++; commit(); break;
+    case 'favorReset': { const f = b.specials.find(x => x.id === el.closest('[data-fid]')?.dataset.fid); if (f) { f.favorUsed = false; addLog(b, `${facName(f)}: Renown went up, so House Favor is available again.`, 'event'); commit(); } break; }
     case 'sendMonster': addLog(b, `${b.guestMonster || 'The monster guest'} is sent on its way.`, 'event'); b.guestMonster = null; commit(); break;
     case 'rehomeRefugees': addLog(b, `The ${b.refugees?.n || ''} refugees are settled in a new home.`, 'event'); b.refugees = null; commit(); break;
     case 'extra-': b.extraDefenders = Math.max(0, b.extraDefenders - 1); commit(); break;
@@ -1684,6 +1750,24 @@ document.addEventListener('change', (e) => {
   if (el.dataset.conn && b.connection) { updateGroup(b, el.dataset.conn, el.value); commit(); return; }
   if (el.dataset.prereq) { prereqOpen[b.id] = true; b.prereqs[el.dataset.prereq] = el.checked; commit(); return; }
   if (el.dataset.act === 'enclosed') { b.walls.enclosed = el.checked; commit(); return; }
+  if (el.dataset.act === 'eberron') {
+    if (el.checked) {
+      if (!confirm(`Turn on the Eberron rules for ${b.name}?\n\nThis adds Bastion rules and special facilities from the Eberron campaign setting (${EBERRON_SOURCE}). They aren't part of the standard Dungeon Master's Guide rules.\n\nOnly continue if your DM has said Eberron content is allowed.`)) { el.checked = false; return; }
+      b.eberron = true; addLog(b, 'Eberron rules turned on (with DM approval).', 'build');
+    } else {
+      const ebf = b.specials.filter(f => DEF[f.key]?.eberron);
+      if (ebf.length) { toast(`Remove the Eberron facilities first: ${ebf.map(facName).join(', ')}.`); el.checked = true; return; }
+      delete b.eberron; delete b.mobile; delete b.travelling; addLog(b, 'Eberron rules turned off.', 'build');
+    }
+    commit(); return;
+  }
+  if (el.dataset.act === 'mobile') {
+    if (el.checked) b.mobile = { vehicle: '' };
+    else if (b.specials.some(f => HELMS.includes(f.key))) { toast('Remove the helm facility first; a helm only works in a mobile Bastion.'); el.checked = true; return; }
+    else { delete b.mobile; delete b.travelling; }
+    commit(); return;
+  }
+  if (el.dataset.mobileVehicle != null) { if (b.mobile) { b.mobile.vehicle = el.value.slice(0, 80); commit(); } return; }
   const fid = el.closest('[data-fid]')?.dataset.fid;
   const f = fid && b.specials.find(x => x.id === fid);
   if (f && el.dataset.fbind) { f[el.dataset.fbind] = el.value; commit(); return; }

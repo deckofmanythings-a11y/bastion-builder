@@ -486,3 +486,161 @@ const TREASURE_TABLE = [
   { max: 98, text: 'an Uncommon magic item (roll on an Uncommon Arcana, Armaments, Implements or Relics table of your choice)' },
   { max: 100, text: 'a Rare magic item (roll on a Rare Arcana, Armaments, Implements or Relics table of your choice)' },
 ];
+
+// ---- Eberron: Forge of the Artificer (optional, per Bastion: b.eberron) ------------------
+// Off by default. Paraphrased summaries; the book has the full wording. Facilities below carry
+// `eberron: true` and only show up once a Bastion turns the Eberron option on.
+const EBERRON_SOURCE = 'Eberron: Forge of the Artificer';
+
+const EBERRON_PREREQS = {
+  toolsFocus: 'Can use Artisan\'s Tools as a Spellcasting Focus',
+  renownHouse10: 'Renown 10+ with a dragonmarked house',
+  renownKundarak15: 'Renown 15+ with House Kundarak',
+  renownOrien15: 'Renown 15+ with House Orien',
+  renownLyrandar25: 'Renown 25+ with House Lyrandar',
+};
+Object.assign(PREREQS, EBERRON_PREREQS);
+
+const DRAGONMARKED_HOUSES = ['Cannith', 'Deneith', 'Ghallanda', 'Jorasco', 'Kundarak', 'Lyrandar', 'Medani', 'Orien', 'Phiarlan', 'Sivis', 'Tharashk', 'Thuranni', 'Vadalis'];
+
+// Manifest Zone: what the Manifest Charm does, by linked plane (expend the Charm, no action unless noted).
+const MANIFEST_PLANES = {
+  'Daanvi, the Perfect Order': 'end the Blinded, Deafened, Paralyzed or Poisoned condition on yourself',
+  'Dolurrh, the Realm of the Dead': 'cast a Necromancy spell with a spell slot as if the slot were 1 level higher',
+  'Fernia, the Sea of Fire': 'cast a spell that deals Fire damage as if its slot were 1 level higher',
+  'Irian, the Eternal Dawn': 'cast a healing or Radiant-damage spell as if its slot were 1 level higher',
+  'Lamannia, the Twilight Forest': 'cast a spell that conjures or summons a Beast, Elemental or Fey (Conjure Animals, Find Steed, Summon Fey and the like) as if its slot were 1 level higher',
+  'Mabar, the Endless Night': 'cast a spell that animates or summons Undead (Animate Dead, Create Undead, Summon Undead) as if its slot were 1 level higher',
+  'Risia, the Plain of Ice': 'cast a spell that deals Cold damage as if its slot were 1 level higher',
+  'Shavarath, the Battleground': 'on a Critical Hit, deal 10 extra damage of one of the attack\'s damage types',
+  'Syrania, the Azure Sky': 'as a Bonus Action, gain a Fly Speed equal to your Speed for 1 minute',
+  'Thelanis, the Faerie Court': 'give one target of your Enchantment or Illusion spell Disadvantage on its save against it',
+  'Xoriat, the Realm of Delirium': 'when you cast a spell with a spell slot, roll on the Wild Magic Surge table (PHB)',
+};
+
+// Museum: Secrets of the Past charms, by the origin of the treasure on display.
+const MUSEUM_ORIGINS = {
+  Argonnessen: 'you know Draconic; expend it to cast Dragon\'s Breath (level 4 version) on yourself only',
+  Ashtakala: 'you know Abyssal and Infernal; expend it to cast Ray of Sickness (level 4 version)',
+  Dhakaan: 'you know Goblin; expend it to cast Staggering Smite',
+  Khyber: 'you have Darkvision 120 ft.; expend it for Truesight 60 ft. for 1 minute',
+  'Xen\'drik': 'you know Giant; expend it as a Bonus Action to make your Strength 25 for 1 hour',
+};
+
+const FORGE_CONSTRUCTS = [
+  { name: 'Animated Broom', days: 7, cost: 250 },
+  { name: 'Animated Flying Sword', days: 7, cost: 250 },
+  { name: 'Animated Armor', days: 14, cost: 1000 },
+  { name: 'Scarecrow', days: 14, cost: 1000 },
+  { name: 'Animated Rug of Smothering', days: 21, cost: 2000 },
+  { name: 'Helmed Horror', days: 42, cost: 5000 },
+  { name: 'Shield Guardian', days: 63, cost: 25000 },
+  { name: 'Warforged Titan', days: 250, cost: 200000, note: 'Stat block in Eberron: Rising from the Last War. Making new ones breaks the Treaty of Thronehold and risks reigniting war across Khorvaire.' },
+];
+
+// Helms make a mobile Bastion move. Issuing Travel also makes the DM roll a Bastion event, as if Maintain.
+const travelOrder = (how) => ({
+  id: 'travel', label: 'Travel', days: (b) => b.turnLength || 7, cost: 0, effect: 'travel', topic: 'Destination',
+  note: `The hireling pilots the Bastion toward your destination ${how}, 8 hours a day for the whole Bastion turn, stopping early on arrival or if something stops you. Issuing this order also makes the DM roll a Bastion event, as if you'd issued Maintain.`,
+  avail: (b) => (!b.mobile ? 'Only a mobile Bastion can travel' : ''),
+});
+
+const EBERRON_FACILITIES = [
+  {
+    key: 'dragonmark-outpost', name: 'Dragonmark Outpost', level: 5, prereq: 'renownHouse10', space: 'Roomy', hirelings: 1, order: 'Empower', eberron: true,
+    desc: 'Space set aside for your dragonmarked house. The hireling is a house agent who liaises with your superiors.',
+    passive: 'Adding this facility raises your Renown with your house by 1. Dragonmark Empowerment (needs a Dragonmark feat): after a Long Rest in your Bastion, gain one extra level 2 spell slot, usable only for spells you have prepared from your Dragonmark feat.',
+    options: { house: true },
+    orders: [
+      { id: 'favor', label: 'House Favor', days: 7, cost: 0, effect: 'favor',
+        note: 'Call in one benefit your Renown with the house allows (Eberron ch. 5); it doesn\'t count against your usual number of favors. Can\'t be used again until your Renown with the house goes up. (Time isn\'t stated; 7 days assumed.)',
+        avail: (b, f) => (f.favorUsed ? 'Already used; available again once your Renown with the house goes up' : '') },
+    ],
+  },
+  {
+    key: 'kundarak-vault', name: 'Kundarak Vault', level: 9, prereq: 'renownKundarak15', space: 'Cramped', hirelings: 1, order: 'Trade', eberron: true,
+    desc: 'An extradimensional vault for trade goods and treasure. Only you and your hirelings can open its door.',
+    passive: 'Kundarak Access: you (and only you) can reach the vault\'s contents from any Kundarak bank, in cities across Khorvaire and in Stormreach.',
+    orders: [
+      { id: 'goods', label: 'Goods', days: 7, effect: 'trade',
+        note: (b) => `Either buy nonmagical items worth up to ${b.level >= 13 ? '5,000' : '2,000'} GP (you pay) and store them in the vault, or sell goods from the vault at +${b.level >= 17 ? 100 : b.level >= 13 ? 50 : 20}% over standard price. Enter net GP (negative = spent).` },
+    ],
+  },
+  {
+    key: 'navigators-helm', name: 'Navigator\'s Helm', level: 9, prereq: null, space: 'Cramped', hirelings: 1, order: 'Empower', eberron: true, mobileOnly: true,
+    desc: 'Lets a mobile Bastion built in a mundane waterborne vehicle sail.',
+    passive: '',
+    orders: [travelOrder('at the vessel\'s speed')],
+  },
+  {
+    key: 'orien-helm', name: 'Orien Helm', level: 9, prereq: 'renownOrien15', space: 'Cramped', hirelings: 1, order: 'Empower', eberron: true, mobileOnly: true,
+    desc: 'Lets a mobile Bastion built in a Lightning Rail cart travel. The hireling is a dragonmarked heir of House Orien.',
+    passive: '',
+    orders: [travelOrder('at 30 miles per hour along an existing line of conductor stones')],
+  },
+  {
+    key: 'artificers-forge', name: 'Artificer\'s Forge', level: 13, prereq: 'toolsFocus', space: 'Roomy', hirelings: 2, order: 'Craft', eberron: true,
+    desc: 'Two magewright hirelings skilled at making magic items.',
+    passive: 'Crafting Assistants: when you craft a magic item in your Bastion (DMG rules), one or both hirelings can help, cutting the time. Charge Refreshment: whenever a magic item in your Bastion regains charges, it regains 1 extra.',
+    orders: [
+      { id: 'magic', label: 'Magic Item', custom: true, effect: 'stash',
+        note: 'A Common or Uncommon magic item of your choice from the DMG. The forge has the tools and the hirelings are proficient with them and with Arcana; the two help each other, so it takes less time than usual. They have any spells the item casts prepared.' },
+    ],
+  },
+  {
+    key: 'inquisitive-agency', name: 'Inquisitive Agency', level: 13, prereq: null, space: 'Roomy', hirelings: 1, order: 'Research', eberron: true,
+    desc: 'The office of an inquisitive agency (your own, or a branch of one like Information Acquisition or Karr\'Aashta\'s Investigations). The hireling is a secretary with a directory of contacts and agents.',
+    passive: 'Mobile Bastion: can\'t Research while traveling; after arriving, the first Research order is 7 days setting up a new network.',
+    orders: [
+      { id: 'network', label: 'Establish a new network', days: 7, cost: 0, effect: 'network', note: 'After the Bastion has moved, the secretary spends 7 days building contacts in the new place.',
+        avail: (b, f) => (!f.needsNetwork ? 'The network here is already set up' : b.travelling ? 'Not while the Bastion is traveling' : '') },
+      { id: 'gather', label: 'Information Gathering', days: 7, cost: 0, effect: 'stash', topic: 'Person to investigate',
+        result: (b, f, d) => `Report on ${d.topic || 'the person'} (previous 7 days and next 7, within 10 miles): where they stay, what they spend money on, whom they meet, where they showed identification papers. DM may hold back what the agents couldn't learn.`,
+        avail: (b, f) => (b.travelling ? 'Not while the Bastion is traveling' : f.needsNetwork ? 'Establish a new network here first' : '') },
+    ],
+  },
+  {
+    key: 'lyrandar-helm', name: 'Lyrandar Helm', level: 13, prereq: 'renownLyrandar25', space: 'Cramped', hirelings: 1, order: 'Empower', eberron: true, mobileOnly: true,
+    desc: 'Lets a mobile Bastion built in an elemental airship or elemental galleon travel. The hireling is a dragonmarked heir of House Lyrandar; on an airship, the Helm crew station is part of this facility.',
+    passive: '',
+    orders: [travelOrder('at the vehicle\'s speed')],
+  },
+  {
+    key: 'manifest-zone', name: 'Manifest Zone', level: 13, prereq: 'focus', space: 'Vast', hirelings: 1, order: 'Empower', eberron: true,
+    desc: 'Your Bastion is steeped in the energy of one of Eberron\'s planes, chosen when you build it.',
+    passive: 'Mobile Bastion: the planar link is suspended while moving. After arriving, the next Empower order spends 7 days making a new link (same plane or another).',
+    options: { plane: true },
+    orders: [
+      { id: 'relink', label: 'Re-establish planar link', days: 7, cost: 0, effect: 'relink', note: 'After the Bastion has moved: 7 days to link to the plane chosen above (you can switch planes first).',
+        avail: (b, f) => (!f.needsNetwork ? 'The planar link is intact' : b.travelling ? 'Not while the Bastion is traveling' : '') },
+      { id: 'charm', label: 'Manifest Charm', days: 7, cost: 0, effect: 'stash',
+        result: (b, f) => `Manifest Charm (${f.options.plane}): ${MANIFEST_PLANES[f.options.plane] || ''}. Lasts until used.`,
+        note: '7 days of rites, then you gain a Manifest Charm (a Supernatural Gift) that lasts until you use it. You needn\'t be in the Bastion.',
+        avail: (b, f) => (b.travelling ? 'Not while the Bastion is traveling' : f.needsNetwork ? 'Re-establish the planar link first' : '') },
+    ],
+  },
+  {
+    key: 'museum', name: 'Museum', level: 13, prereq: null, space: 'Roomy', hirelings: 1, order: 'Research', eberron: true,
+    desc: 'Relics and treasures from expeditions you joined or sponsored, catalogued and on display.',
+    passive: 'Secrets of the Past: study a treasure here for 7 days, then finish a Long Rest in your Bastion to gain its Charm (7 days or until used). You can\'t gain another while you still have one.',
+    options: { origins: true },
+    enlarge: { cost: 2000, hirelings: 2, note: 'Vast: display two treasures of different origins; +2 hirelings, for three in total.' },
+    orders: [
+      { id: 'lore', label: 'Specialized Lore', days: 7, cost: 0, effect: 'stash', topic: 'Question of ancient history',
+        result: (b, f, d) => `Specialized lore (as Legend Lore) about ${d.topic || 'a question of ancient history'}; the hireling shares it next time you speak` },
+    ],
+  },
+  {
+    key: 'construct-forge', name: 'Construct Forge', level: 17, prereq: 'toolsFocus', space: 'Vast', hirelings: 2, order: 'Recruit', eberron: true,
+    desc: 'A forge for building Constructs.',
+    passive: 'Constructs made here count as Bastion Defenders (untick one to let it act by its own nature instead; it then can\'t defend).',
+    orders: [
+      { id: 'construct', label: 'Construct', effect: 'construct',
+        choices: FORGE_CONSTRUCTS.map(c => ({ value: c.name, label: `${c.name} (${c.days} days, ${c.cost.toLocaleString()} GP)`, cost: c.cost })),
+        cost: (b, f, d) => (d && d.choiceCost) || 0,
+        days: (b, f, d) => (FORGE_CONSTRUCTS.find(c => c.name === d?.choice) || { days: 7 }).days,
+        note: (b) => 'Warforged Titan: building new ones is illegal under the Treaty of Thronehold.' },
+    ],
+  },
+];
+FACILITIES.push(...EBERRON_FACILITIES);

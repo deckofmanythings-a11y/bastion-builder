@@ -48,6 +48,17 @@ const FURN = {
   trophy: [['trophyHead', 'row', 2, 1, { n: 4, sides: true }], ['display', 'center', 2, 2, { n: 4 }], ['statue', 'fill', 2, 2, { n: 2 }], ['rug', 'decal', 6, 4]],
   'war-room': [['mapTable', 'center', 6, 5, { shrink: true }], ['banner', 'row', 2, 1, { n: 3 }], ['weaponRack', 'side', 4, 1], ['bookshelf', 'side', 4, 1], ['brazier', 'fill', 1, 1, { n: 2 }]],
   workshop: [['workbench', 'row', 4, 2, { n: 3 }], ['toolRack', 'side', 4, 1], ['worktable', 'center', 4, 2], ['crates', 'fill', 2, 2, { n: 3 }], ['barrels', 'fill', 2, 2]],
+  // Eberron (optional)
+  'dragonmark-outpost': [['desk', 'back', 3, 3], ['banner', 'row', 2, 1, { n: 3 }], ['bookshelf', 'side', 4, 1], ['armchair', 'fill', 2, 2, { n: 2 }], ['chest', 'wall', 2, 1], ['rug', 'decal', 5, 4]],
+  'kundarak-vault': [['chest', 'row', 2, 1, { n: 4, sides: true }], ['shelf', 'side', 4, 1], ['crates', 'fill', 2, 2, { n: 2 }]],
+  'navigators-helm': [['chartTable', 'center', 4, 2], ['bookshelf', 'side', 4, 1], ['chest', 'wall', 2, 1]],
+  'orien-helm': [['chartTable', 'center', 4, 2], ['shelf', 'side', 4, 1], ['chest', 'wall', 2, 1]],
+  'lyrandar-helm': [['chartTable', 'center', 4, 2], ['brazier', 'fill', 1, 1, { n: 2 }], ['chest', 'wall', 2, 1]],
+  'artificers-forge': [['forge', 'back', 4, 3], ['workbench', 'row', 4, 2, { n: 2 }], ['anvil', 'center', 2, 1], ['toolRack', 'side', 4, 1], ['worktable', 'center', 4, 2], ['crates', 'fill', 2, 2]],
+  'inquisitive-agency': [['desk', 'back', 3, 3], ['bookshelf', 'row', 4, 1, { n: 3 }], ['chartTable', 'center', 4, 2], ['armchair', 'fill', 2, 2, { n: 2 }], ['plant', 'fill', 1, 1]],
+  'manifest-zone': [['circle', 'center', 8, 8, { shrink: true }], ['pedestal', 'back', 1, 1, { n: 2 }], ['brazier', 'fill', 1, 1, { n: 4 }], ['candles', 'fill', 1, 1, { n: 3 }]],
+  museum: [['display', 'center', 2, 2, { n: 5 }], ['trophyHead', 'row', 2, 1, { n: 4, sides: true }], ['statue', 'fill', 2, 2, { n: 2 }], ['pedestal', 'fill', 1, 1, { n: 3 }], ['rug', 'decal', 6, 4]],
+  'construct-forge': [['forge', 'back', 4, 3], ['anvil', 'center', 2, 1], ['armorStand', 'side', 2, 2, { n: 4 }], ['worktable', 'center', 4, 2, { n: 2 }], ['toolRack', 'wall', 4, 1], ['crates', 'fill', 2, 2, { n: 2 }]],
 };
 const NOOK_ITEM = { Closet: 'closet', Washroom: 'washroom', Privy: 'privy', Bath: 'tub', Wardrobe: 'wardrobe', Pantry: 'pantry',
   'Linen cupboard': 'shelf', Alcove: 'cushion', 'Storage nook': 'crates' };
@@ -56,7 +67,8 @@ const WET_NOOK = new Set(['Washroom', 'Privy', 'Bath']);
 const FLOOR_OF = { private: 'wood', public: 'woodL', service: 'flags', secure: 'darkFlags', top: 'wood' };
 const FLOOR_KEY = { smithy: 'flags', kitchen: 'flags', Kitchen: 'flags', stable: 'dirt', training: 'sand', garden: 'soil', menagerie: 'grassPlot',
   Courtyard: 'flags', greenhouse: 'tiles', theater: 'woodL', sanctuary: 'marble', sanctum: 'marble', reliquary: 'marble', teleport: 'marble',
-  'gaming-hall': 'woodL', pub: 'wood', library: 'wood', archive: 'wood', 'war-room': 'flags' };
+  'gaming-hall': 'woodL', pub: 'wood', library: 'wood', archive: 'wood', 'war-room': 'flags',
+  'artificers-forge': 'flags', 'construct-forge': 'flags', 'kundarak-vault': 'darkFlags', 'manifest-zone': 'marble', museum: 'marble' };
 
 function strHash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
 const roomKind = r => (r.key || r.basic || null);

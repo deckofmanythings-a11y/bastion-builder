@@ -21,6 +21,10 @@ const MAP_ZONE = {
   reliquary: 'secure', sacristy: 'private', sanctuary: 'private', sanctum: 'private', scriptorium: 'service',
   smithy: 'service', stable: 'outdoor', storehouse: 'service', teleport: 'secure', theater: 'public',
   training: 'outdoor', trophy: 'public', 'war-room': 'secure', workshop: 'service',
+  // Eberron (optional)
+  'dragonmark-outpost': 'public', 'kundarak-vault': 'secure', 'navigators-helm': 'service', 'orien-helm': 'service',
+  'lyrandar-helm': 'service', 'artificers-forge': 'service', 'inquisitive-agency': 'public', 'manifest-zone': 'private',
+  museum: 'public', 'construct-forge': 'service',
 };
 // [width along the hall, depth away from it]; repeats weight the choice
 const MAP_DIMS = { 4: [[2, 2]], 16: [[4, 4], [4, 4], [4, 4], [8, 2], [2, 8]], 36: [[6, 6], [6, 6], [9, 4], [4, 9], [12, 3]] };
