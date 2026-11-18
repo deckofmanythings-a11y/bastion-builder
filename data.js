@@ -456,20 +456,33 @@ const EVENTS = [
   { max: 100, key: 'treasure', name: 'Treasure' },
 ];
 
+// Rules text is paraphrased (this repo is public); see the DMG's Bastion events for the full wording.
 const ALL_WELL = [
-  'Accident reports are way down.',
-  'The leak in the roof has been fixed.',
-  'No vermin infestations to report.',
-  'You-Know-Who lost their spectacles again.',
-  'One of your hirelings adopted a stray dog.',
-  'You received a lovely letter from a friend.',
-  'Some practical joker has been putting rotten eggs in people\'s boots.',
-  'Someone thought they saw a ghost.',
+  'Hardly anyone has been hurt on the job lately.',
+  'The roof finally stopped leaking.',
+  'Not a single rat or roach reported.',
+  'A certain someone has misplaced their spectacles yet again.',
+  'A hireling has taken in a stray dog.',
+  'A friend sent you a warm letter.',
+  "A prankster keeps hiding rotten eggs in people's boots.",
+  'Somebody swears they saw a ghost.',
 ];
 
+// Guest (d4). effect: what the app tracks for you.
 const GUEST_TABLE = [
-  'An individual of renown stays for 7 days and speaks well of you.',
-  'A foreign dignitary visits seeking shelter or a favor.',
-  'A traveling expert lodges here and can share knowledge with you.',
-  'A mercenary signs on as a Bastion Defender.',
+  { text: 'A guest of great renown stays 7 days, then leaves you a letter of recommendation (a Mark of Prestige).', effect: 'letter' },
+  { text: 'A guest seeking sanctuary from persecution for their beliefs or crimes stays 7 days, and gives you 1d6 × 100 GP before leaving.', effect: 'gift' },
+  { text: 'A mercenary guest joins as one extra Bastion Defender. They need no facility, and stay until you send them away or they are killed.', effect: 'mercenary' },
+  { text: 'A Friendly monster (a brass dragon or a treant, say) stays as a guest. If the Bastion is attacked meanwhile, it defends it and you lose no Bastion Defenders. It leaves after defending once, or when you send it away.', effect: 'monster' },
+];
+
+// Treasure (d100): which DMG chapter 7 table to roll on.
+const TREASURE_TABLE = [
+  { max: 40, text: 'an art object worth 25 GP (roll on the 25 GP Art Objects table)' },
+  { max: 63, text: 'an art object worth 250 GP (roll on the 250 GP Art Objects table)' },
+  { max: 73, text: 'an art object worth 750 GP (roll on the 750 GP Art Objects table)' },
+  { max: 75, text: 'an art object worth 2,500 GP (roll on the 2,500 GP Art Objects table)' },
+  { max: 90, text: 'a Common magic item (roll on a Common Arcana, Armaments, Implements or Relics table of your choice)' },
+  { max: 98, text: 'an Uncommon magic item (roll on an Uncommon Arcana, Armaments, Implements or Relics table of your choice)' },
+  { max: 100, text: 'a Rare magic item (roll on a Rare Arcana, Armaments, Implements or Relics table of your choice)' },
 ];

@@ -528,75 +528,128 @@ function rollEvent(b) {
 
 function randomFacility(b) { return b.specials.length ? b.specials[roll(b.specials.length) - 1] : null; }
 
-function resolveEvent(b, r) {
+// A random hireling, weighted by how many each special facility has.
+function randomHireling(b) {
+  const pool = b.specials.flatMap(f => Array.from({ length: hirelingCount(f) }, () => f));
+  return pool.length ? pool[roll(pool.length) - 1] : null;
+}
+
+function resolveEvent(b, r, { reroll = false } = {}) {
   const e = eventFor(r);
   const ev = { roll: r, key: e.key, name: e.name, lines: [], actions: [] };
-  const shutNext = (f, why) => { if (!f) return; f.shutdownTurn = b.turn + 1; ev.lines.push(`${facName(f)} can't be issued orders on the next Bastion turn (${why}).`); };
+  const shutNext = (f, why) => { if (!f) return; f.shutdownTurn = b.turn + 1; ev.lines.push(`${facName(f)} can't be used on the next Bastion turn (${why}).`); };
   switch (e.key) {
     case 'allwell': { const k = roll(8); ev.lines.push(`Nothing significant happens. (d8 ${k}) ${ALL_WELL[k - 1]}`); break; }
     case 'attack': {
-      const walls = b.walls.enclosed && b.walls.built > 0;
-      const count = 6 - (walls ? 2 : 0);
-      const sides = b.armoryStocked ? 8 : 6;
-      const dice = rollDice(count, sides);
-      const ones = dice.filter(x => x === 1).length;
-      ev.lines.push(`A hostile force attacks! Rolled ${count}d${sides}${walls ? ' (walls: −2 dice)' : ''}${b.armoryStocked ? ' (stocked Armory: d8s)' : ''}: [${dice.join(', ')}].`);
-      const had = totalDefenders(b);
-      if (had === 0) { ev.lines.push('The Bastion has no defenders.'); shutNext(randomFacility(b), 'damaged in the attack'); }
-      else if (ones) { const lost = loseDefenders(b, Math.min(ones, had)); ev.lines.push(`${Math.min(ones, had)} Bastion Defender(s) lost: ${lost}.`); }
-      else ev.lines.push('No defenders lost — the attack is repelled.');
-      if (b.armoryStocked) { b.armoryStocked = false; ev.lines.push('Armory equipment is expended.'); }
+      ev.lines.push('A hostile force attacks the Bastion and is defeated.');
+      if (b.guestMonster) {
+        ev.lines.push(`Your guest, ${b.guestMonster}, defends the Bastion: no Bastion Defenders are lost. Having defended it once, the monster moves on.`);
+        addLog(b, `${b.guestMonster} defended the Bastion and left.`, 'event');
+        b.guestMonster = null;
+      } else {
+        const had = totalDefenders(b);
+        const walls = b.walls.enclosed && b.walls.built > 0;
+        const count = 6 - (walls ? 2 : 0);
+        const sides = b.armoryStocked ? 8 : 6;
+        const dice = rollDice(count, sides);
+        const ones = dice.filter(x => x === 1).length;
+        if (had) ev.lines.push(`Rolled ${count}d${sides}${walls ? ' (walls: −2 dice)' : ''}${b.armoryStocked ? ' (stocked Armory: d8s)' : ''}: [${dice.join(', ')}]. Each 1 kills a Bastion Defender.`);
+        if (had === 0) { ev.lines.push('The Bastion has no defenders, so a special facility is damaged.'); shutNext(randomFacility(b), 'damaged in the attack; repaired free afterwards'); }
+        else if (ones) { const lost = loseDefenders(b, Math.min(ones, had)); ev.lines.push(`${Math.min(ones, had)} Bastion Defender(s) killed: ${lost}.`); }
+        else ev.lines.push('No defenders lost.');
+        if (b.armoryStocked) { b.armoryStocked = false; ev.lines.push('Armory equipment is expended.'); }
+        if (b.connection?.kind === 'combined' && connectionPartners(b).length) ev.lines.push(`Combined Bastion: ${connectionPartners(b).map(ownerLabel).join(', ')} may take all or some of these defender losses instead.`);
+      }
+      if (b.refugees) { ev.lines.push(`The ${b.refugees.n} refugees sheltering here leave after the attack.`); b.refugees = null; }
       ev.lines.push('Any visiting Teleportation Circle spellcaster departs.');
-      if (b.connection?.kind === 'combined' && connectionPartners(b).length) ev.lines.push(`Combined Bastion: ${connectionPartners(b).map(ownerLabel).join(', ')} may take all or some of these defender losses instead.`);
       break;
     }
     case 'criminal': {
-      const f = randomFacility(b); const bribe = roll(6) * 100;
-      ev.lines.push(`A hireling${f ? ` in ${facName(f)}` : ''} is exposed as having a criminal past. Officials can be bribed for ${gp(bribe)}.`);
-      ev.actions = [{ id: 'pay', label: `Pay ${gp(bribe)}`, gp: -bribe }, { id: 'refuse', label: 'Refuse', shut: f?.id }];
-      ev.lines.push('Event details are in the DMG — confirm with your DM.');
+      const f = randomHireling(b); const bribe = roll(6) * 100;
+      if (!f) { ev.lines.push('Officials arrive with a warrant, but your Bastion has no hirelings yet. Nothing happens.'); break; }
+      const alone = hirelingCount(f) <= 1;
+      ev.lines.push(`Officials or bounty hunters arrive with a warrant: a hireling in ${facName(f)} has a criminal past. Pay a bribe of ${gp(bribe)} to keep them, or let them be arrested.`);
+      ev.lines.push(alone ? `If arrested, ${facName(f)} is left with no hirelings and can't be used on the next Bastion turn; then the hireling is replaced free.`
+        : `If arrested, the hireling is replaced free; ${facName(f)} still has other hirelings, so it keeps working.`);
+      ev.actions = [{ id: 'pay', label: `Pay the ${gp(bribe)} bribe`, gp: -bribe, log: 'Bribe paid; the hireling stays.' },
+        { id: 'refuse', label: 'Let them be arrested', shut: alone ? f.id : null, log: `A hireling of ${facName(f)} is arrested${alone ? '' : ' and will be replaced'}.` }];
       break;
     }
     case 'opportunity':
-      ev.lines.push('Your Bastion is offered an extraordinary opportunity (DM supplies details).');
-      ev.actions = [{ id: 'invest', label: 'Invest 500 GP', gp: -500 }, { id: 'decline', label: 'Decline' }];
+      ev.lines.push("Your Bastion is offered the chance to host an important festival or celebration, fund a powerful spellcaster's research, or appease a domineering noble. Work out the details with your DM.");
+      ev.lines.push('Seize it for 500 GP and the attention it brings means another roll on the Bastion Events table. Decline and nothing happens.');
+      ev.actions = [{ id: 'invest', label: 'Seize it (500 GP)', gp: -500, again: true }, { id: 'decline', label: 'Decline' }];
       break;
-    case 'visitors': { const g = roll(6) * 100; earn(b, g, 'Friendly visitors'); ev.lines.push(`Friendly visitors pay ${gp(g)} to use your Bastion.`); break; }
-    case 'guest': {
-      const k = roll(4); ev.lines.push(`(d4 ${k}) ${GUEST_TABLE[k - 1]}`);
-      if (k === 4) { b.extraDefenders++; ev.lines.push('+1 Bastion Defender.'); }
+    case 'visitors': {
+      const g = roll(6) * 100, f = randomFacility(b); earn(b, g, 'Friendly visitors');
+      ev.lines.push(`Friendly visitors pay ${gp(g)} for brief use of ${f ? `your ${facName(f)} (or another special facility, with your DM)` : 'one of your special facilities'}. It doesn't interrupt any orders.`);
       break;
     }
-    case 'lost': { const f = randomFacility(b); ev.lines.push('A facility\'s hirelings go missing.'); shutNext(f, 'hirelings missing'); break; }
-    case 'magic': { const t = 'Uncommon magic item discovered by the hirelings (DM\'s choice)'; b.stash.push({ id: uid(), text: t, from: 'Bastion event', turn: b.turn }); ev.lines.push(t + ' — added to stash.'); break; }
-    case 'refugees': { const n = sum(rollDice(2, 4)); const g = roll(6) * 100; earn(b, g, 'Refugees'); ev.lines.push(`${n} refugees seek shelter and pay ${gp(g)}.`); break; }
-    case 'aid':
-      ev.lines.push('A local leader requests aid. Send Bastion Defenders: each rolls 1d6; a total of 10+ solves the problem.');
-      ev.actions = [{ id: 'aid', label: 'Send defenders…', aid: true }, { id: 'ignore', label: 'Decline' }];
+    case 'guest': {
+      const k = roll(4), gt = GUEST_TABLE[k - 1];
+      ev.lines.push(`A Friendly guest comes to stay. (d4 ${k}) ${gt.text}`);
+      if (gt.effect === 'letter') { b.stash.push({ id: uid(), text: 'Letter of recommendation from a renowned guest (Mark of Prestige)', from: 'Bastion event: Guest', turn: b.turn }); ev.lines.push('The letter is added to your stash.'); }
+      if (gt.effect === 'gift') { const g = roll(6) * 100; earn(b, g, "Guest's parting gift"); ev.lines.push(`Their gift: ${gp(g)}.`); }
+      if (gt.effect === 'mercenary') { b.extraDefenders = (b.extraDefenders || 0) + 1; ev.lines.push('+1 Bastion Defender (shown under Other defenders).'); }
+      if (gt.effect === 'monster') { b.guestMonster = 'a Friendly monster'; ev.lines.push('Name the monster with your DM on the Stash & Defenders tab.'); }
       break;
-    case 'treasure': { const t = 'Treasure acquired (roll on the DMG treasure tables)'; b.stash.push({ id: uid(), text: t, from: 'Bastion event', turn: b.turn }); ev.lines.push(t + ' — added to stash.'); break; }
+    }
+    case 'lost': {
+      const f = randomFacility(b);
+      if (!f) { ev.lines.push('Your Bastion has no special facilities, so no one is lost.'); break; }
+      ev.lines.push(`${facName(f)}'s hirelings leave (why is up to you).`); shutNext(f, 'no hirelings; replaced free afterwards'); break;
+    }
+    case 'magic': {
+      const t = 'Uncommon Potion or Scroll of your choice (discovered or accidentally made by your hirelings)';
+      b.stash.push({ id: uid(), text: t, from: 'Bastion event: Magical Discovery', turn: b.turn }); ev.lines.push(t + ': added to your stash, free.'); break;
+    }
+    case 'refugees': {
+      const n = sum(rollDice(2, 4)), g = roll(6) * 100; earn(b, g, 'Refugees');
+      b.refugees = { n: (b.refugees?.n || 0) + n, turn: b.turn };
+      ev.lines.push(`${n} refugees fleeing a monster attack, natural disaster or other calamity seek refuge, and pay ${gp(g)} for your hospitality and protection. If no basic facility is big enough to house them, they camp just outside.`);
+      ev.lines.push('They stay until you find them a new home (mark it on the Stash & Defenders tab) or a hostile force attacks.');
+      break;
+    }
+    case 'aid':
+      ev.lines.push('A local leader asks for help: a missing person, brigands troubling the area, or the like.');
+      if (totalDefenders(b)) {
+        ev.lines.push('To help, send one or more Bastion Defenders and roll 1d6 each. A total of 10 or more solves it for a reward of 1d6 × 100 GP. Under 10 still solves it, but the reward is halved and one defender you sent is killed.');
+        ev.actions = [{ id: 'aid', label: 'Send defenders…', aid: true }, { id: 'ignore', label: 'Decline' }];
+      } else ev.lines.push("You have no Bastion Defenders to send, so you can't help this time.");
+      break;
+    case 'treasure': {
+      const k = roll(100), t = TREASURE_TABLE.find(x => k <= x.max);
+      b.stash.push({ id: uid(), text: `Treasure: ${t.text}`, from: 'Bastion event: Treasure', turn: b.turn });
+      ev.lines.push(`(d100 ${k}) The Bastion acquires ${t.text}. How (an inheritance, a gift, a theft, a lucky find) is up to you.`);
+      ev.lines.push(b.present ? "You're in the Bastion, so you can claim it now (it's in your stash)." : "It's placed in your stash until you can claim it.");
+      break;
+    }
   }
-  if (e.key !== 'allwell') ev.lines.push('Full event text is in the DMG — your DM has the final say.');
+  if (reroll) ev.lines.unshift('The opportunity draws attention, so the DM rolls again on the Bastion Events table:');
   addLog(b, `Bastion event (d100 ${r}): ${e.name}. ${ev.lines.join(' ')}`, 'event');
   b.pendingEvent = ev;
 }
 
 function eventAction(id) {
   const b = B(); const ev = b.pendingEvent; if (!ev) return;
-  const a = ev.actions.find(x => x.id === id);
+  const a = ev.actions.find(x => x.id === id); if (!a) return;
   if (a.aid) {
     const max = totalDefenders(b);
     const n = Math.min(max, Math.max(0, parseInt(prompt(`Send how many defenders? (you have ${max})`, String(Math.min(max, 2))), 10) || 0));
     if (!n) return toast('No defenders sent.');
     const dice = rollDice(n, 6); const t = sum(dice); const reward = roll(6) * 100;
     if (t >= 10) { earn(b, reward, 'Request for aid reward'); addLog(b, `Sent ${n} defenders: [${dice.join(', ')}] = ${t}. Problem solved! Reward ${gp(reward)}.`, 'event'); }
-    else { const half = Math.floor(reward / 2); earn(b, half, 'Request for aid (partial)'); const lost = loseDefenders(b, 1); addLog(b, `Sent ${n} defenders: [${dice.join(', ')}] = ${t}. Partial success — reward halved to ${gp(half)}; lost ${lost || 'no one'}.`, 'event'); }
+    else { const half = Math.floor(reward / 2); earn(b, half, 'Request for aid (halved)'); const lost = loseDefenders(b, 1); addLog(b, `Sent ${n} defenders: [${dice.join(', ')}] = ${t}. Solved, but the reward is halved to ${gp(half)} and one defender is killed: ${lost || 'no one'}.`, 'event'); }
   } else {
     if (a.gp) { if (a.gp < 0) spend(b, -a.gp, `${ev.name}: ${a.label}`); else earn(b, a.gp, ev.name); }
-    if (a.shut) { const f = b.specials.find(x => x.id === a.shut); if (f) { f.shutdownTurn = b.turn + 1; addLog(b, `${facName(f)} loses its hireling for a turn.`, 'event'); } }
-    if (!a.gp && !a.shut) addLog(b, `${ev.name}: ${a.label}.`, 'event');
+    if (a.shut) { const f = b.specials.find(x => x.id === a.shut); if (f) { f.shutdownTurn = b.turn + 1; addLog(b, `${facName(f)} has no hirelings and can't be used next turn.`, 'event'); } }
+    if (a.log) addLog(b, a.log, 'event'); else if (!a.gp && !a.shut) addLog(b, `${ev.name}: ${a.label}.`, 'event');
   }
   b.pendingEvent = null;
+  if (a.again) { // Extraordinary Opportunity: roll again, rerolling Opportunity itself
+    let r; do r = roll(100); while (eventFor(r).key === 'opportunity');
+    resolveEvent(b, r, { reroll: true });
+  }
   commit();
 }
 
@@ -974,6 +1027,8 @@ function stashView(b) {
       ${barracks.map(f => `<div class="drow"><span>${esc(facName(f))}</span><b>${f.defenders || 0} / ${barrackCap(f)}</b></div>`).join('')}
       ${menag.map(f => `<div class="drow"><span>${esc(facName(f))} creatures</span><b>${f.creatures.filter(c => c.defender).length}</b></div>`).join('')}
       <div class="drow"><span>Other defenders (guests, mercenaries…)</span><span><button class="btn xs ghost" data-act="extra-">−</button> <b>${b.extraDefenders}</b> <button class="btn xs ghost" data-act="extra+">+</button></span></div>
+      ${b.guestMonster != null ? `<div class="drow"><span>Monster guest <input class="inl" data-guest-monster value="${esc(b.guestMonster)}" title="Name it with your DM"></span><span class="small">defends the next attack (no defenders lost), then leaves <button class="btn xs ghost" data-act="sendMonster">Send away</button></span></div>` : ''}
+      ${b.refugees ? `<div class="drow"><span>Refugees sheltering here</span><span><b>${b.refugees.n}</b> <button class="btn xs ghost" data-act="rehomeRefugees" title="They stay until you find them a new home or the Bastion is attacked">Found them a new home</button></span></div>` : ''}
       <div class="drow"><span>Armory</span><b>${hasFacility(b, 'armory') ? (b.armoryStocked ? 'Stocked (d8s)' : 'Depleted') : '—'}</b></div>
       <div class="drow"><span>Walls</span><b>${b.walls.built} sq${b.walls.enclosed ? ', fully enclosed (−2 dice)' : ''}</b></div>
       ${!barracks.length ? '<p class="small">Build a Barrack to recruit Bastion Defenders.</p>' : ''}
@@ -1526,6 +1581,8 @@ document.addEventListener('click', (e) => {
     case 'lt+': f.lieutenants = Math.min(10, (f.lieutenants || 0) + 1); commit(); break;
     case 'lt-': f.lieutenants = Math.max(0, (f.lieutenants || 0) - 1); commit(); break;
     case 'extra+': b.extraDefenders++; commit(); break;
+    case 'sendMonster': addLog(b, `${b.guestMonster || 'The monster guest'} is sent on its way.`, 'event'); b.guestMonster = null; commit(); break;
+    case 'rehomeRefugees': addLog(b, `The ${b.refugees?.n || ''} refugees are settled in a new home.`, 'event'); b.refugees = null; commit(); break;
     case 'extra-': b.extraDefenders = Math.max(0, b.extraDefenders - 1); commit(); break;
     case 'fortify': {
       const picks = []; while (picks.length < 2) { const s = SAVES[roll(6) - 1]; if (!picks.includes(s)) picks.push(s); }
@@ -1617,6 +1674,7 @@ document.addEventListener('change', (e) => {
     commit(); return;
   }
   if (el.dataset.mapFloors != null) { if (b.lineMap) { drawLineMap(b, b.lineMap.seed, el.value); commit(); } return; }
+  if (el.dataset.guestMonster != null) { b.guestMonster = el.value.trim().slice(0, 80) || 'a Friendly monster'; commit(); return; }
   if (el.dataset.mapCaption) { const m = (b.maps || []).find(x => x.id === el.dataset.mapCaption); if (m) { m.caption = el.value.slice(0, 120); commit(); } return; }
   if (el.dataset.bind) {
     b[el.dataset.bind] = el.dataset.num != null ? Math.max(1, parseInt(el.value, 10) || 1) : el.value;
