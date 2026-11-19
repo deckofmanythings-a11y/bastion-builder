@@ -516,7 +516,7 @@ function renderMapSVG(b, L) {
   const hasWalls = (b.walls?.built || 0) > 0 || b.walls?.enclosed;
   const panels = L.fl.map((f, i) => ({ f, fi: i, box: floorBox(f, i === 0 && hasWalls, i ? groundShell(L) : []) }));
   if (L.demi.length) panels.push({ demi: true, box: { x0: -2, y0: -2, x1: 13, y1: 8 + (L.demi.length - 1) * 8 } });
-  const PAD = 24, GAP = 36, TITLE = L.notes ? 86 : 64, PT = 26;
+  const PAD = 24, GAP = 36, PT = 26;
   let x = PAD; const maxH = Math.max(...panels.map(p => (p.box.y1 - p.box.y0) * MS));
   for (const p of panels) { // widen narrow panels so their titles don't run into the next one
     const title = p.demi ? 'DEMIPLANE' : p.f.name.toUpperCase();
@@ -525,6 +525,17 @@ function renderMapSVG(b, L) {
   }
   for (const p of panels) { p.px = x; p.w = (p.box.x1 - p.box.x0) * MS; p.h = (p.box.y1 - p.box.y0) * MS; x += p.w + GAP; }
   const width = Math.max(x - GAP + PAD, 560);
+  // the architect's caption wraps to the map's width (13px italic Georgia averages about 6.4px a character)
+  const noteLines = [];
+  if (L.notes) {
+    const per = Math.max(20, Math.floor((width - 2 * PAD) / 6.4));
+    let line = '';
+    for (const w of String(L.notes).split(/\s+/).filter(Boolean)) {
+      if (line && (line + ' ' + w).length > per) { noteLines.push(line); line = w; } else line = line ? line + ' ' + w : w;
+    }
+    if (line) noteLines.push(line);
+  }
+  const TITLE = noteLines.length ? 86 + (noteLines.length - 1) * 17 : 64;
   // key entries
   const keyItems = [];
   for (const f of L.fl) for (const r of [...f.rooms, ...f.plots]) if (!keyItems.some(k => k.r.ref === r.ref)) keyItems.push({ n: r.n, r, fl: f.name });
@@ -540,7 +551,7 @@ function renderMapSVG(b, L) {
   out.push(`<rect width="${width}" height="${height}" fill="#fbfcfe"/>`);
   out.push(`<text x="${PAD}" y="34" font-size="24" font-weight="700" fill="${INK}">${e(b.name)}</text>`);
   out.push(`<text x="${PAD}" y="54" font-size="13" fill="${INK}" opacity=".8">${e([b.character, b.campaign].filter(Boolean).join(' · '))}${b.character || b.campaign ? ' · ' : ''}1 square = 5 feet</text>`);
-  if (L.notes) out.push(`<text x="${PAD}" y="74" font-size="13" font-style="italic" fill="${INK}" opacity=".85">${e(L.notes)}</text>`);
+  noteLines.forEach((t, i) => out.push(`<text x="${PAD}" y="${74 + i * 17}" font-size="13" font-style="italic" fill="${INK}" opacity=".85">${e(t)}</text>`));
 
   for (const p of panels) {
     const ox = p.px - p.box.x0 * MS, oy = TITLE + PT - p.box.y0 * MS;
