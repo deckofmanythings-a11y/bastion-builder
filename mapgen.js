@@ -105,7 +105,7 @@ function viaOptions(b, ref) {
   if (!isIndoor(me) || rooms.some(r => r.via === ref)) return [];
   return rooms.filter(r => r.ref !== ref && isIndoor(r) && !r.via && rooms.filter(q => q.via === r.ref && q.ref !== ref).length < 2);
 }
-function mapSig(b) { return mapRooms(b).map(r => `${r.ref}:${r.sq}${r.shape ? ':' + r.shape : ''}${r.via ? '>' + r.via : ''}`).sort().join('|') + (hallSquares(b) === 1 ? '|hall5' : '') + (stairStyle(b) !== 'straight' ? `|st:${stairStyle(b)}` : ''); }
+function mapSig(b) { return mapRooms(b).map(r => `${r.ref}:${r.sq}${r.shape ? ':' + r.shape : ''}${r.via ? '>' + r.via : ''}`).sort().join('|') + (hallSquares(b) === 1 ? '|hall5' : '') + (stairStyle(b) !== 'straight' ? `|st:${stairStyle(b)}` : '') + (b.openPlan ? '|open' : ''); }
 
 // Main hall depth in squares: 2 (10 ft, default) or 1 (5 ft), from b.hallWidth. Set per generateMap call.
 let HALL = 2;
@@ -198,6 +198,10 @@ function stairBox(label, level) {
 }
 function generateMap(b, { seed, floors = 'auto', plan = null }) {
   HALL = hallSquares(b); STAIR = stairStyle(b);
+  if (isOpenPlan(b)) { // wall-less Bastions are always a single storey: an architect's floors all fold into the ground
+    floors = 'single';
+    if (plan) plan = { ...plan, floors: [{ name: 'Ground Floor', level: 0, east: (plan.floors || []).flatMap(f => f.east || []), west: (plan.floors || []).flatMap(f => f.west || []) }] };
+  }
   const rng = mulberry32(seed >>> 0);
   const rooms = mapRooms(b);
   if (plan) {
@@ -580,7 +584,7 @@ const MS = 16; // px per square
 const FACING_ROT = { south: 0, west: 90, north: 180, east: 270 };
 const facingOf = b => (FACING_ROT[b.facing] != null ? b.facing : 'south');
 // b.openPlan: a wall-less Bastion (a grove, a great cavern). Rooms keep their squares and shapes, but are drawn as
-// marked-out areas: no walls, no doors. Only the drawing changes; the layout is the same.
+// marked-out areas: no walls, no doors. It is always a single storey (generateMap folds any floors into one).
 const isOpenPlan = b => !!b.openPlan;
 let TXT_ROT = 0; // set while drawing a turned floor: room labels counter-rotate about their centres
 const INK = '#1f4f99', GRID = '#c3d4ec', GRID5 = '#9fbbe0', PAPER = '#eaf1fa';

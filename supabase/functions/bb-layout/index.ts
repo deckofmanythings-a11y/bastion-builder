@@ -155,7 +155,7 @@ function validate(x: any): Ask | string {
   }
   const cur = x.current && JSON.stringify(x.current).length < 8000 ? x.current : null;
   return { campaign: x.campaign, bastionId: x.bastionId, request: x.request.trim(), rooms, current: cur,
-    bastion: { name: String(x.bastion?.name ?? "").slice(0, 80), walls: String(x.bastion?.walls ?? "").slice(0, 80),
+    bastion: { name: String(x.bastion?.name ?? "").slice(0, 80), walls: String(x.bastion?.walls ?? "").slice(0, 160),
       facing: FACINGS.includes(x.bastion?.facing) ? x.bastion.facing : "south" } };
 }
 
