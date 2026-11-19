@@ -749,8 +749,21 @@ function renderFurnished(b, L, fi, opts = {}) {
     // gate
     blk(g, s, X(-1), Y(w.y1) - s * 0.15, s, s * 0.3, '#5a3a1e', { line: '#2a1a0c' }); blk(g, s, X(0), Y(w.y1) - s * 0.15, s, s * 0.3, '#5a3a1e', { line: '#2a1a0c' });
   }
-  if (opts.labels) drawLabels(g, b, L, fi, s, X, Y, furn, f);
-  return { canvas: c, width: W, height: H, meta: { floor: fi, floorName: f.name, seed: L.seed, sig: L.sig, s, x0: box.x0, y0: box.y0, furnished: 1 } };
+  // turn the finished floor so the front door faces the chosen way; labels go on afterwards, upright
+  const rot = FACING_ROT[facingOf(b)];
+  let out = c, P = (x, y) => [X(x), Y(y)];
+  if (rot) {
+    const W0 = W, H0 = H; // the floor's own size (P keeps using these after W/H swap)
+    const t = rot % 180 !== 0, c2 = document.createElement('canvas'); c2.width = t ? H : W; c2.height = t ? W : H;
+    const g2 = c2.getContext('2d');
+    if (rot === 90) { g2.translate(H0, 0); P = (x, y) => [H0 - Y(y), X(x)]; }
+    else if (rot === 180) { g2.translate(W0, H0); P = (x, y) => [W0 - X(x), H0 - Y(y)]; }
+    else { g2.translate(0, W0); P = (x, y) => [Y(y), W0 - X(x)]; }
+    g2.rotate(rot * Math.PI / 180); g2.drawImage(c, 0, 0); g2.setTransform(1, 0, 0, 1, 0, 0); // labels use P, not the turn
+    out = c2; [W, H] = [c2.width, c2.height];
+  }
+  if (opts.labels) drawLabels(out.getContext('2d'), b, L, fi, s, P, furn, f);
+  return { canvas: out, width: W, height: H, meta: { floor: fi, floorName: f.name, seed: L.seed, sig: L.sig, s, x0: box.x0, y0: box.y0, rot, furnished: 1 } };
 }
 
 // Stone stairs: each flight shaded step by step (lighter climbing up, darker going down), flat landings,
@@ -785,20 +798,21 @@ function drawStairs(g, s, X, Y, st) {
   g.restore();
 }
 
-function drawLabels(g, b, L, fi, s, X, Y, furn, f) {
+// P(x, y): floor squares -> [px, py] on the (possibly turned) canvas
+function drawLabels(g, b, L, fi, s, P, furn, f) {
   for (const r of [...f.rooms, ...f.plots]) {
     const fr = furn.get(rkey(r)), p = fr ? fr.label : { x: r.x + r.w / 2, y: r.y + r.h / 2 };
-    numberBadge(g, X(p.x), Y(p.y), roomNo(r), Math.max(11, s * 0.42));
+    numberBadge(g, ...P(p.x, p.y), roomNo(r), Math.max(11, s * 0.42));
   }
   for (const d of f.doors) if (d.kind === 'secret') {
-    const cx = d.o === 'h' ? X(d.x + 0.5) : X(d.x), cy = d.o === 'h' ? Y(d.y) : Y(d.y + 0.5);
+    const [cx, cy] = d.o === 'h' ? P(d.x + 0.5, d.y) : P(d.x, d.y + 0.5);
     g.font = `italic 700 ${Math.max(10, s * 0.4)}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.lineWidth = 3; g.strokeStyle = '#000'; g.strokeText('S', cx, cy); g.fillStyle = '#ffd36a'; g.fillText('S', cx, cy);
   }
   if (f.stairs) {
     g.font = `700 ${Math.max(10, s * 0.34)}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
     for (const a of stairMarks(f.stairs).arrows) {
-      const [x, y] = a.at; g.lineWidth = 3; g.strokeStyle = '#000'; g.strokeText(a.label, X(x), Y(y)); g.fillStyle = '#fff'; g.fillText(a.label, X(x), Y(y));
+      const [px, py] = P(...a.at); g.lineWidth = 3; g.strokeStyle = '#000'; g.strokeText(a.label, px, py); g.fillStyle = '#fff'; g.fillText(a.label, px, py);
     }
   }
 }

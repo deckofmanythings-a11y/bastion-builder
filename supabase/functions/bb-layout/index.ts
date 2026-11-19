@@ -62,8 +62,16 @@ async function ipHash(req: Request) {
 // ------------------------------------------------------------------ prompt + schema
 const SYSTEM = `You plan floor layouts for D&D 2024 Bastions (player strongholds). A program draws the actual map on
 5-ft graph paper; you only decide the arrangement, as JSON. How the program builds a floor:
-- Each floor has one straight central hall running east-west. On the entrance floor (level 0) the front door opens
-  from a foyer in the middle of the hall's south side. Stairs (when there are several floors) sit opposite the foyer.
+- Each floor has one straight central hall. You write the plan as if the front door faced south: the hall runs
+  "east-west" and on the entrance floor (level 0) the front door opens from a foyer in the middle of the hall's
+  "south" side. Stairs (when there are several floors) sit opposite the foyer. These are PLAN directions.
+- "facing" then turns the finished drawing so the front door faces that real direction. Keep the current facing
+  unless the player asks for a change. A north-south hall means facing "east" or "west". The plan directions become:
+  facing south: unchanged. facing north: plan east = real west, plan west = real east, plan north = real south.
+  facing east: plan east wing = real north end, plan west wing = real south end, plan north side = real west side,
+  plan south side (foyer) = real east side. facing west: plan east wing = real south end, plan west wing = real north
+  end, plan north side = real east side, plan south side (foyer) = real west side.
+  The player speaks in REAL directions; translate them into plan directions, and use real directions in "summary".
 - Rooms line both sides of the hall. "east" and "west" are the two wings, each listed from the middle (near the
   foyer and stairs) outward to the far end. The program picks north/south sides to keep the building compact,
   unless you pin a room with "sides".
@@ -71,10 +79,13 @@ const SYSTEM = `You plan floor layouts for D&D 2024 Bastions (player strongholds
   must face each other). To put two groups "across the hall" from each other, list both groups in the SAME wing and
   pin one group north and the other south; they then start from the middle together and face each other. Rooms of a
   pair must share a side. The foyer (entrance floor) is on the south side in the middle; stairs are on the north.
-- EVERY room always gets its own door onto the hall, so nobody has to walk through one room to reach another.
-  You cannot remove that; you can only add extra connecting doors between neighbouring rooms ("pairs" with door).
+- Every room gets its own door onto the hall, EXCEPT an inner room: a pair with through:true makes "b" an inner room
+  entered only through "a" (no hall door of its own; door is implied). Use it when the player wants a room reached
+  through another (a vault behind the study, a dressing room off the bedroom). An inner room can't have inner rooms
+  of its own, and a room can have at most 2. Rooms the player already set as inner rooms are marked in their name;
+  the program keeps them that way whatever you do, so give them a through pair too.
 - "pairs" keeps two rooms side by side in the same wing (the program puts them next to each other); list a pair's
-  rooms consecutively in that wing. Use door:true only when an internal connecting door makes sense (dining room to
+  rooms consecutively in that wing. Use door:true (without through) only when an internal connecting door makes sense (dining room to
   kitchen, bedroom to private study). Never connect a service room (kitchen, smithy, storage) into a bedroom.
 - "outdoor" rooms become fenced plots in the yard between the building and the gate. Courtyards, gardens, stables,
   training areas and menageries normally go outdoors; any room may if the player asks (e.g. "the smithy out back").
@@ -92,10 +103,11 @@ or "" if nothing to add. Floor "name" is a short label like "Ground Floor", "Tow
 
 const SCHEMA = {
   type: "object", additionalProperties: false,
-  required: ["summary", "notes", "floors", "outdoor", "pairs", "secret", "sides"],
+  required: ["summary", "notes", "facing", "floors", "outdoor", "pairs", "secret", "sides"],
   properties: {
     summary: { type: "string" },
     notes: { type: "string" },
+    facing: { type: "string", enum: ["south", "north", "east", "west"] },
     floors: {
       type: "array",
       items: {
@@ -110,8 +122,8 @@ const SCHEMA = {
     pairs: {
       type: "array",
       items: {
-        type: "object", additionalProperties: false, required: ["a", "b", "door"],
-        properties: { a: { type: "string" }, b: { type: "string" }, door: { type: "boolean" } },
+        type: "object", additionalProperties: false, required: ["a", "b", "door", "through"],
+        properties: { a: { type: "string" }, b: { type: "string" }, door: { type: "boolean" }, through: { type: "boolean" } },
       },
     },
     secret: { type: "array", items: { type: "string" } },
@@ -126,7 +138,7 @@ const SCHEMA = {
 };
 
 type Room = { ref: string; name: string; type: string; space: string; zone: string };
-type Ask = { campaign: string; bastionId: string; request: string; rooms: Room[]; current: unknown; bastion: { name?: string; walls?: string } };
+type Ask = { campaign: string; bastionId: string; request: string; rooms: Room[]; current: unknown; bastion: { name?: string; walls?: string; facing?: string } };
 
 function validate(x: any): Ask | string {
   if (!x || typeof x !== "object") return "body must be a JSON object";
@@ -139,13 +151,15 @@ function validate(x: any): Ask | string {
   for (const r of x.rooms) {
     if (!r || typeof r.ref !== "string" || !/^[a-z0-9]{4,40}$/.test(r.ref)) return "bad room ref";
     const s = (v: unknown, n: number) => String(v ?? "").slice(0, n);
-    rooms.push({ ref: r.ref, name: s(r.name, 80), type: s(r.type, 40), space: s(r.space, 10), zone: s(r.zone, 12) });
+    rooms.push({ ref: r.ref, name: s(r.name, 160), type: s(r.type, 40), space: s(r.space, 10), zone: s(r.zone, 12) });
   }
   const cur = x.current && JSON.stringify(x.current).length < 8000 ? x.current : null;
   return { campaign: x.campaign, bastionId: x.bastionId, request: x.request.trim(), rooms, current: cur,
-    bastion: { name: String(x.bastion?.name ?? "").slice(0, 80), walls: String(x.bastion?.walls ?? "").slice(0, 80) } };
+    bastion: { name: String(x.bastion?.name ?? "").slice(0, 80), walls: String(x.bastion?.walls ?? "").slice(0, 80),
+      facing: FACINGS.includes(x.bastion?.facing) ? x.bastion.facing : "south" } };
 }
 
+const FACINGS = ["south", "north", "east", "west"];
 // keep only known refs, each once; leftovers are reported so the browser can place them with its defaults
 function clean(plan: any, rooms: Room[]) {
   const known = new Set(rooms.map((r) => r.ref)), seen = new Set<string>();
@@ -158,9 +172,10 @@ function clean(plan: any, rooms: Room[]) {
   if (!floors.some((f: any) => f.level === 0)) floors.unshift({ name: "Ground Floor", level: 0, east: [], west: [] });
   return {
     summary: String(plan.summary ?? "").slice(0, 600), notes: String(plan.notes ?? "").slice(0, 160),
+    facing: FACINGS.includes(plan.facing) ? plan.facing : "south",
     floors, outdoor: take(plan.outdoor),
     pairs: (Array.isArray(plan.pairs) ? plan.pairs : []).filter((p: any) => known.has(p?.a) && known.has(p?.b) && p.a !== p.b)
-      .slice(0, 30).map((p: any) => ({ a: p.a, b: p.b, door: !!p.door })),
+      .slice(0, 30).map((p: any) => ({ a: p.a, b: p.b, door: !!p.door || !!p.through, through: !!p.through })),
     secret: (Array.isArray(plan.secret) ? plan.secret : []).filter((r: any) => known.has(r)).slice(0, 30),
     sides: (Array.isArray(plan.sides) ? plan.sides : []).filter((x: any) => known.has(x?.ref) && (x.side === "north" || x.side === "south"))
       .slice(0, 60).map((x: any) => ({ ref: x.ref, side: x.side })),
@@ -219,7 +234,7 @@ Deno.serve(async (req) => {
   };
 
   const userMsg = [
-    `Bastion: ${ask.bastion.name || "(unnamed)"}${ask.bastion.walls ? ` — walls: ${ask.bastion.walls}` : ""}`,
+    `Bastion: ${ask.bastion.name || "(unnamed)"}${ask.bastion.walls ? ` — walls: ${ask.bastion.walls}` : ""} — front door currently faces ${ask.bastion.facing}`,
     `Rooms (ref, name, kind, size, usual zone):`,
     ...ask.rooms.map((r) => `- ${r.ref} | ${r.name} | ${r.type} | ${r.space} | ${r.zone}`),
     ask.current ? `\nCurrent plan (revise it according to the request; keep what the request doesn't change):\n${JSON.stringify(ask.current)}` : "",

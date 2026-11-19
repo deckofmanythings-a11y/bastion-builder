@@ -79,12 +79,33 @@ function mapRooms(b) {
   for (const x of b.basics) {
     if (x.building?.action === 'add') continue;
     const sq = SPACES[x.space].squares, zone = MAP_ZONE[x.type] || 'service';
-    out.push({ ref: x.id, zone, sq, fb: x.type, basic: x.type, shape: validShape(x.shape, sq, zone === 'outdoor') });
+    out.push({ ref: x.id, zone, sq, fb: x.type, basic: x.type, shape: validShape(x.shape, sq, zone === 'outdoor'), via: x.via || '' });
   }
-  for (const f of b.specials) { const sq = SPACES[facSpace(f)].squares, zone = MAP_ZONE[f.key] || 'service'; out.push({ ref: f.id, zone, sq, fb: DEF[f.key].name, key: f.key, shape: zone === 'demi' ? '' : validShape(f.shape, sq, zone === 'outdoor') }); }
-  return out;
+  for (const f of b.specials) { const sq = SPACES[facSpace(f)].squares, zone = MAP_ZONE[f.key] || 'service'; out.push({ ref: f.id, zone, sq, fb: DEF[f.key].name, key: f.key, shape: zone === 'demi' ? '' : validShape(f.shape, sq, zone === 'outdoor'), via: f.via || '' }); }
+  return cleanVia(out);
 }
-function mapSig(b) { return mapRooms(b).map(r => `${r.ref}:${r.sq}${r.shape ? ':' + r.shape : ''}`).sort().join('|') + (hallSquares(b) === 1 ? '|hall5' : '') + (stairStyle(b) !== 'straight' ? `|st:${stairStyle(b)}` : ''); }
+// An inner room ("via") has no door of its own onto the hall: it is entered through its parent room. Both must be
+// indoor rooms, and there are no chains (a parent can't itself be an inner room) or more than 2 inner rooms per parent.
+const isIndoor = r => r && r.zone !== 'outdoor' && r.zone !== 'demi';
+function cleanVia(rooms) {
+  const by = new Map(rooms.map(r => [r.ref, r])), kids = new Map();
+  for (const r of rooms) {
+    const pa = by.get(r.via);
+    if (!r.via || r.via === r.ref || !isIndoor(r) || !isIndoor(pa) || pa.via) { r.via = ''; continue; }
+    const n = (kids.get(pa.ref) || 0) + 1; if (n > 2) { r.via = ''; continue; }
+    kids.set(pa.ref, n);
+  }
+  // a parent whose own via was dropped above may have made a child's chain check pass late; re-check once
+  for (const r of rooms) if (r.via && by.get(r.via).via) r.via = '';
+  return rooms;
+}
+// Facilities a room could be entered through (for the picker): other indoor rooms that aren't inner rooms themselves.
+function viaOptions(b, ref) {
+  const rooms = mapRooms(b), me = rooms.find(r => r.ref === ref);
+  if (!isIndoor(me) || rooms.some(r => r.via === ref)) return [];
+  return rooms.filter(r => r.ref !== ref && isIndoor(r) && !r.via && rooms.filter(q => q.via === r.ref && q.ref !== ref).length < 2);
+}
+function mapSig(b) { return mapRooms(b).map(r => `${r.ref}:${r.sq}${r.shape ? ':' + r.shape : ''}${r.via ? '>' + r.via : ''}`).sort().join('|') + (hallSquares(b) === 1 ? '|hall5' : '') + (stairStyle(b) !== 'straight' ? `|st:${stairStyle(b)}` : ''); }
 
 // Main hall depth in squares: 2 (10 ft, default) or 1 (5 ft), from b.hallWidth. Set per generateMap call.
 let HALL = 2;
@@ -179,7 +200,11 @@ function generateMap(b, { seed, floors = 'auto', plan = null }) {
   HALL = hallSquares(b); STAIR = stairStyle(b);
   const rng = mulberry32(seed >>> 0);
   const rooms = mapRooms(b);
-  if (plan) return finishLayout(b, seed, floors, ...planFloors(rooms, plan, rng), plan);
+  if (plan) {
+    for (const p of plan.pairs || []) { const r = rooms.find(q => q.ref === p.b); if (p.through && r && !r.via) r.via = p.a; }
+    cleanVia(rooms);
+    return finishLayout(b, seed, floors, ...planFloors(rooms, plan, rng), plan);
+  }
   const indoor = rooms.filter(r => r.zone !== 'outdoor' && r.zone !== 'demi');
   let ground = indoor, upper = [], cellar = [];
   if (floors !== 'single' && indoor.length > 7) {
@@ -189,6 +214,10 @@ function generateMap(b, { seed, floors = 'auto', plan = null }) {
   } else if (floors !== 'single' && indoor.some(r => r.zone === 'top') && indoor.length > 3) {
     upper = indoor.filter(r => r.zone === 'top'); // an Observatory wants to be up high
     ground = indoor.filter(r => r.zone !== 'top');
+  }
+  for (const r of indoor) if (r.via) { // an inner room lives on its parent's floor
+    const home = [ground, upper, cellar].find(l => l.some(q => q.ref === r.via)), mine = [ground, upper, cellar].find(l => l.includes(r));
+    if (home && mine && home !== mine) { mine.splice(mine.indexOf(r), 1); home.push(r); }
   }
   const stairs = upper.length && cellar.length ? 'UP/DN' : upper.length ? 'UP' : cellar.length ? 'DN' : null;
   const fl = [buildFloor('Ground Floor', ground, rng, { foyer: true, stairs, level: 0 })];
@@ -233,6 +262,13 @@ function planFloors(rooms, plan, rng) {
   const rank = l => (l === 0 ? 0 : l > 0 ? l : 100 - l);
   pf = [...lv.values()].sort((a, c) => rank(a.level) - rank(c.level));
   const ground = pf.find(f => f.level === 0);
+  for (const r of rooms) if (r.via && used.has(r.ref)) { // an inner room moves next to its parent, wherever the plan put it
+    const home = pf.find(f => f.east.some(q => q.ref === r.via) || f.west.some(q => q.ref === r.via));
+    if (!home) continue;
+    for (const f of pf) for (const w of ['east', 'west']) { const i = f[w].indexOf(r); if (i >= 0) f[w].splice(i, 1); }
+    const w = home.east.some(q => q.ref === r.via) ? 'east' : 'west';
+    home[w].splice(home[w].findIndex(q => q.ref === r.via) + 1, 0, r);
+  }
   for (const r of rooms) {
     if (used.has(r.ref) || r.zone === 'demi') continue;
     used.add(r.ref);
@@ -273,7 +309,28 @@ function buildFloor(name, rooms, rng, { foyer, stairs, level = 0, wings = null, 
   } else {
     [east, west, doorPairs] = zoneWings(rooms.flatMap(size), rng);
   }
+  [east, west] = groupVia(east, west);
   return placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level, secret, fit });
+}
+// Pull each inner room out of wherever it was and put it beside its parent, in the parent's block: the first
+// after the parent, a second one before it, so both share a wall with it.
+function groupVia(east, west) {
+  const all = [...east, ...west], refs = new Set(all.flat().map(r => r.ref));
+  const kids = new Map();
+  for (const blk of all) for (let i = blk.length - 1; i >= 0; i--) {
+    const r = blk[i];
+    if (r.via && refs.has(r.via)) { (kids.get(r.via) || kids.set(r.via, []).get(r.via)).unshift(r); blk.splice(i, 1); }
+  }
+  for (const [pa, list] of kids) {
+    const blk = all.find(x => x.some(r => r.ref === pa)); if (!blk) continue;
+    const order = [...new Set(list.map(r => r.ref))]; // a split inner room keeps its parts together
+    const first = list.filter(r => r.ref === order[0]), second = list.filter(r => r.ref === order[1]);
+    const last = blk.map(r => r.ref).lastIndexOf(pa);
+    blk.splice(last + 1, 0, ...first);
+    blk.splice(blk.findIndex(r => r.ref === pa), 0, ...second);
+  }
+  const keep = l => l.filter(x => x.length);
+  return [keep(east), keep(west)];
 }
 
 function zoneWings(sized, rng) {
@@ -302,7 +359,7 @@ function groundFit(g) {
 // fit: the ground floor's reach along the hall in each quarter (north/south x east/west). Upper floors and
 // cellars fill whichever quarter has the most of that outline left, so they stack over the ground floor.
 function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0, secret, fit = null }) {
-  const placed = [], doors = [];
+  const placed = [], doors = [], hallDoor = new Map(); // room rect -> its door onto the hall
   const st = stairs ? stairBox(stairs, level) : null;
   const start = { nE: st ? st.x + st.w : -1, nW: -1, sE: 1, sW: -1 };
   const cur = { ...start };
@@ -351,8 +408,10 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
       const q = best.v, fx = c.left ? inner - best.w : inner;
       const rect = { ref: q.ref, fb: q.fb, zone: q.zone, x: fx, y: c.y, w: best.w, h: c.h, side: s, inNotch: true };
       if (q.split) { rect.part = q.split.i; rect.parts = q.split.n; }
+      if (q.via) rect.via = q.via;
       placed.push(rect);
-      doors.push({ x: fx + Math.floor(rng() * best.w), y: s === 'N' ? 0 : HALL, o: 'h', kind: secret.has(q.ref) ? 'secret' : q.zone === 'secure' ? 'locked' : 'door' });
+      const hd = { x: fx + Math.floor(rng() * best.w), y: s === 'N' ? 0 : HALL, o: 'h', kind: secret.has(q.ref) ? 'secret' : q.zone === 'secure' ? 'locked' : 'door' };
+      doors.push(hd); hallDoor.set(rect, hd);
       if (best.w < c.w) alcoves.push({ x: c.left ? c.x : c.x + best.w, y: c.y, w: c.w - best.w, h: c.h });
     } else alcoves.push({ x: c.x, y: c.y, w: c.w, h: c.h });
   };
@@ -390,12 +449,14 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
           const y = s === 'N' ? -p.d : HALL;
           const rect = { ref: r.ref, fb: r.fb, zone: r.zone, x, y, w: p.w, h: p.d, side: s };
           if (r.split) { rect.part = r.split.i; rect.parts = r.split.n; }
+          if (r.via) rect.via = r.via;
           const left = refHash(r.ref) & 1; // which end the notch is at is fixed per facility, so redraws agree
           if (p.cut) rect.cut = { x: left ? x : x + p.w - p.cut.w, y: s === 'N' ? -p.cut.d : HALL, w: p.cut.w, h: p.cut.d };
           placed.push(rect);
           // the room's own door: on the part of its front wall that actually touches the hall
           const fx0 = p.cut && left ? x + p.cut.w : x, fw = p.cut ? p.w - p.cut.w : p.w;
-          doors.push({ x: fx0 + Math.floor(rng() * fw), y: s === 'N' ? 0 : HALL, o: 'h', kind: secret.has(r.ref) ? 'secret' : r.zone === 'secure' ? 'locked' : 'door' });
+          const hd = { x: fx0 + Math.floor(rng() * fw), y: s === 'N' ? 0 : HALL, o: 'h', kind: secret.has(r.ref) ? 'secret' : r.zone === 'secure' ? 'locked' : 'door' };
+          doors.push(hd); hallDoor.set(rect, hd);
           if (p.cut) fillNotch({ ...rect.cut, left }, s, nm && nm.L === r ? nm.v : null);
         });
       }
@@ -416,17 +477,39 @@ function placeFloor(name, east, west, doorPairs, rng, { foyer, stairs, level = 0
     put(east, 1); put(west, -1);
   }
 
-  for (const [ra, rc] of doorPairs) {
-    const as = placed.filter(r => r.ref === ra), cs = placed.filter(r => r.ref === rc);
-    const hit = as.flatMap(a => cs.map(c => [a, c])).find(([a, c]) => a.side === c.side && (a.x + a.w === c.x || c.x + c.w === a.x));
-    if (hit) { const [a, c] = hit; doors.push({ x: Math.max(a.x, c.x), y: a.side === 'N' ? -1 : HALL, o: 'v', kind: 'door' }); continue; }
+  // a connecting door between two placed rooms (any of their parts) that share a wall, or null
+  const connect = (as, cs) => {
+    // side by side: the door goes in the row nearest the hall where both rooms really have floor (an L's notch doesn't count)
+    const has = (r, x, y) => roomRects(r).some(q => x >= q.x && x < q.x + q.w && y >= q.y && y < q.y + q.h);
+    for (const [a, c] of as.flatMap(a => cs.map(c => [a, c]))) {
+      if (a.side !== c.side || !(a.x + a.w === c.x || c.x + c.w === a.x)) continue;
+      const [l, r] = a.x < c.x ? [a, c] : [c, a], wx = r.x;
+      const ys = []; for (let y = Math.max(a.y, c.y); y < Math.min(a.y + a.h, c.y + c.h); y++) ys.push(y);
+      if (a.side === 'N') ys.reverse();
+      const y = ys.find(y => has(l, wx - 1, y) && has(r, wx, y));
+      if (y != null) return { x: wx, y, o: 'v', kind: 'door' };
+    }
     const nest = as.flatMap(a => cs.map(c => [a, c])).flatMap(([a, c]) => [[a, c], [c, a]])
       .find(([l, q]) => l.cut && q.inNotch && q.side === l.side && q.x >= l.cut.x && q.x + q.w <= l.cut.x + l.cut.w);
-    if (nest) {
-      const [l, q] = nest, wallX = l.cut.x === l.x ? q.x + q.w : q.x; // the L's wall beside the notch room
-      if (wallX > l.x && wallX < l.x + l.w) doors.push({ x: wallX, y: l.side === 'N' ? -1 : HALL, o: 'v', kind: 'door' });
-      else doors.push({ x: q.x + Math.floor(q.w / 2), y: l.side === 'N' ? q.y : q.y + q.h, o: 'h', kind: 'door' }); // through its back wall
-    }
+    if (!nest) return null;
+    const [l, q] = nest, wallX = l.cut.x === l.x ? q.x + q.w : q.x; // the L's wall beside the notch room
+    if (wallX > l.x && wallX < l.x + l.w) return { x: wallX, y: l.side === 'N' ? -1 : HALL, o: 'v', kind: 'door' };
+    return { x: q.x + Math.floor(q.w / 2), y: l.side === 'N' ? q.y : q.y + q.h, o: 'h', kind: 'door' }; // through its back wall
+  };
+  const viaDone = new Set();
+  // inner rooms: the door into the parent replaces the room's own hall door (if they ended up apart, it keeps it)
+  for (const r of placed) {
+    if (!r.via) continue;
+    const d = connect(placed.filter(q => q.ref === r.via), [r]);
+    if (!d) { delete r.via; continue; }
+    if (secret.has(r.ref)) d.kind = 'secret'; else if (r.zone === 'secure') d.kind = 'locked';
+    doors.push(d); viaDone.add(`${r.via}|${r.ref}`);
+    const hd = hallDoor.get(r); if (hd) doors.splice(doors.indexOf(hd), 1);
+  }
+  for (const [ra, rc] of doorPairs) {
+    if (viaDone.has(`${ra}|${rc}`) || viaDone.has(`${rc}|${ra}`)) continue;
+    const d = connect(placed.filter(r => r.ref === ra), placed.filter(r => r.ref === rc));
+    if (d) doors.push(d);
   }
   const xs = placed.flatMap(r => [r.x, r.x + r.w]).concat([-1, 1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
@@ -480,7 +563,7 @@ function checkMap(layout) {
     }
     const svc = new Set(f.rooms.map((r, i) => r.zone === 'service' ? 'r' + i : null).filter(Boolean));
     f.rooms.forEach((r, i) => {
-      const target = 'r' + i, avoid = r.zone === 'private' || r.zone === 'secure' || r.zone === 'top';
+      const target = 'r' + i, avoid = !r.via && (r.zone === 'private' || r.zone === 'secure' || r.zone === 'top');
       const seen = new Set(['hall']), q = ['hall'];
       while (q.length) { const v = q.shift(); for (const w of adj[v] || []) if (!seen.has(w) && (!avoid || w === target || !svc.has(w))) { seen.add(w); q.push(w); } }
       if (!seen.has(target)) problems.push(`${f.name}: room ${r.n} can't be reached${avoid ? ' without crossing a service room' : ''}`);
@@ -492,6 +575,11 @@ function fillCells(m, r, id) { for (const q of roomRects(r)) for (let y = q.y; y
 
 // ---------------- rendering ----------------
 const MS = 16; // px per square
+// Which way the front door faces (b.facing). Layouts are always built with the door to the south and the hall running
+// east-west; the drawing is then turned. East or west makes the hall run north-south. Text stays upright.
+const FACING_ROT = { south: 0, west: 90, north: 180, east: 270 };
+const facingOf = b => (FACING_ROT[b.facing] != null ? b.facing : 'south');
+let TXT_ROT = 0; // set while drawing a turned floor: room labels counter-rotate about their centres
 const INK = '#1f4f99', GRID = '#c3d4ec', GRID5 = '#9fbbe0', PAPER = '#eaf1fa';
 
 function mapLabel(b, ref, fb) {
@@ -514,16 +602,24 @@ function floorBox(f, walls, under = []) {
 
 function renderMapSVG(b, L) {
   const hasWalls = (b.walls?.built || 0) > 0 || b.walls?.enclosed;
-  const panels = L.fl.map((f, i) => ({ f, fi: i, box: floorBox(f, i === 0 && hasWalls, i ? groundShell(L) : []) }));
-  if (L.demi.length) panels.push({ demi: true, box: { x0: -2, y0: -2, x1: 13, y1: 8 + (L.demi.length - 1) * 8 } });
+  const rot = FACING_ROT[facingOf(b)];
+  const panels = L.fl.map((f, i) => ({ f, fi: i, rot, box: floorBox(f, i === 0 && hasWalls, i ? groundShell(L) : []) }));
+  if (L.demi.length) panels.push({ demi: true, rot: 0, box: { x0: -2, y0: -2, x1: 13, y1: 8 + (L.demi.length - 1) * 8 } });
   const PAD = 24, GAP = 36, PT = 26;
-  let x = PAD; const maxH = Math.max(...panels.map(p => (p.box.y1 - p.box.y0) * MS));
+  const turned = p => p.rot % 180 !== 0; // on screen, a turned panel's width is the floor's north-south depth
   for (const p of panels) { // widen narrow panels so their titles don't run into the next one
     const title = p.demi ? 'DEMIPLANE' : p.f.name.toUpperCase();
     const need = Math.ceil((title.length * 11 + 12) / MS);
-    if (p.box.x1 - p.box.x0 < need) { const extra = need - (p.box.x1 - p.box.x0); p.box.x0 -= Math.floor(extra / 2); p.box.x1 += Math.ceil(extra / 2); }
+    const [a, z] = turned(p) ? ['y0', 'y1'] : ['x0', 'x1'];
+    if (p.box[z] - p.box[a] < need) { const extra = need - (p.box[z] - p.box[a]); p.box[a] -= Math.floor(extra / 2); p.box[z] += Math.ceil(extra / 2); }
   }
-  for (const p of panels) { p.px = x; p.w = (p.box.x1 - p.box.x0) * MS; p.h = (p.box.y1 - p.box.y0) * MS; x += p.w + GAP; }
+  let x = PAD;
+  for (const p of panels) {
+    p.lw = (p.box.x1 - p.box.x0) * MS; p.lh = (p.box.y1 - p.box.y0) * MS; // the floor's own frame
+    [p.w, p.h] = turned(p) ? [p.lh, p.lw] : [p.lw, p.lh]; // on screen
+    p.px = x; x += p.w + GAP;
+  }
+  const maxH = Math.max(...panels.map(p => p.h));
   const width = Math.max(x - GAP + PAD, 560);
   // the architect's caption wraps to the map's width (13px italic Georgia averages about 6.4px a character)
   const noteLines = [];
@@ -558,6 +654,7 @@ function renderMapSVG(b, L) {
     const X = v => ox + v * MS, Y = v => oy + v * MS;
     out.push(`<text x="${p.px}" y="${TITLE + 16}" font-size="15" font-weight="700" fill="${INK}" letter-spacing="1">${p.demi ? 'DEMIPLANE' : e(p.f.name.toUpperCase())}</text>`);
     out.push(`<rect x="${p.px}" y="${TITLE + PT}" width="${p.w}" height="${p.h}" fill="${PAPER}"/>`);
+    const g0 = out.length; TXT_ROT = p.rot;
     if (p.demi) {
       L.demi.forEach((r, i) => out.push(`<rect x="${X(0)}" y="${Y(i * 8)}" width="${6 * MS}" height="${6 * MS}" fill="#fff"/>`));
       grid(out, p, X, Y);
@@ -621,7 +718,8 @@ function renderMapSVG(b, L) {
       const fy = r.side === 'S' ? r.y : r.y + D, fh = r.h - D;
       roomText(out, b, r, X(r.x + r.w / 2), Y(fy + fh / 2), r.w, fh, e);
     }
-    if (f.front) out.push(`<text x="${X(0)}" y="${Y(f.front.y) + 14}" font-size="9" text-anchor="middle" fill="${INK}" stroke="#fff" stroke-width="3" paint-order="stroke">ENTRY</text>`);
+    const sideways = TXT_ROT % 180 !== 0; // turned floors: upright labels need more room beside the door / gate
+    if (f.front) out.push(`<text x="${X(0)}" y="${Y(f.front.y) + (sideways ? 22 : 14)}" font-size="9" text-anchor="middle" fill="${INK}" stroke="#fff" stroke-width="3" paint-order="stroke">ENTRY</text>`);
     // Bastion walls
     if (p.box.wall) {
       const w = p.box.wall, gl = -1, gr = 1;
@@ -634,7 +732,14 @@ function renderMapSVG(b, L) {
         const dash = built >= perim ? '' : ` stroke-dasharray="${built * MS} ${perim * MS}"`;
         out.push(`<path d="${dPath}" stroke="${INK}" stroke-width="7" fill="none"${dash}/><path d="${dPath}" stroke="#fff" stroke-width="2.5" fill="none"${dash}/>`);
       }
-      out.push(`<text x="${X(0)}" y="${Y(w.y1) + 16}" font-size="9" text-anchor="middle" fill="${INK}">GATE</text>`);
+      out.push(`<text x="${X(0)}" y="${Y(w.y1) + (sideways ? 22 : 16)}" font-size="9" text-anchor="middle" fill="${INK}">GATE</text>`);
+    }
+    TXT_ROT = 0;
+    if (p.rot) { // turn the floor about its centre into its on-screen box; other text stays upright about its anchor
+      const cx = p.px + p.lw / 2, cy = TITLE + PT + p.lh / 2, dx = (p.w - p.lw) / 2, dy = (p.h - p.lh) / 2;
+      for (let i = g0; i < out.length; i++) out[i] = out[i].replace(/<text x="([^"]+)" y="([^"]+)" font-size="([^"]+)"/g,
+        (m, tx, ty, fs) => `<text transform="rotate(${-p.rot} ${tx} ${(+ty - fs * 0.35).toFixed(1)})" x="${tx}" y="${ty}" font-size="${fs}"`);
+      out.splice(g0, 0, `<g transform="translate(${dx} ${dy}) rotate(${p.rot} ${cx} ${cy})">`); out.push('</g>');
     }
     if (p === panels[0]) { // compass
       const cx = p.px + p.w - 18, cy = TITLE + PT + 22;
@@ -662,9 +767,11 @@ function grid(out, p, X, Y) {
 
 function roomText(out, b, r, cx, cy, w, h, e) {
   const lb = mapLabel(b, r.ref, r.fb);
+  if (TXT_ROT % 180) [w, h] = [h, w]; // the label is upright on screen, so it fits the room's on-screen width
   const name = lb.short.length * MS * 0.34 <= w * MS - 6 && h >= 2 && w >= 3 && !r.part ? lb.short : null;
-  out.push(`<text x="${cx}" y="${cy + (name ? -1 : 5)}" font-size="${MS * 0.95}" font-weight="700" text-anchor="middle" fill="${INK}" stroke="#fff" stroke-width="3" paint-order="stroke">${roomNo(r)}</text>`);
-  if (name) out.push(`<text x="${cx}" y="${cy + 13}" font-size="${MS * 0.6}" text-anchor="middle" fill="${INK}" stroke="#fff" stroke-width="3" paint-order="stroke">${e(name)}</text>`);
+  const t = TXT_ROT ? `transform="rotate(${-TXT_ROT} ${cx} ${cy})" ` : ''; // both lines turn about the room's centre
+  out.push(`<text ${t}x="${cx}" y="${cy + (name ? -1 : 5)}" font-size="${MS * 0.95}" font-weight="700" text-anchor="middle" fill="${INK}" stroke="#fff" stroke-width="3" paint-order="stroke">${roomNo(r)}</text>`);
+  if (name) out.push(`<text ${t}x="${cx}" y="${cy + 13}" font-size="${MS * 0.6}" text-anchor="middle" fill="${INK}" stroke="#fff" stroke-width="3" paint-order="stroke">${e(name)}</text>`);
 }
 
 // Wall segments = every cell edge between two different regions (hall and stairs count as one),

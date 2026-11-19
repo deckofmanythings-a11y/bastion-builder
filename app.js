@@ -1314,22 +1314,30 @@ function shapeLabel(sh) {
 }
 function shapesCard(b) {
   const zone = new Map(mapRooms(b).map(r => [r.ref, r.zone]));
-  const rows = nookParents(b).filter(p => zone.has(p.ref) && zone.get(p.ref) !== 'demi' && shapeOptions(p.sq, zone.get(p.ref) === 'outdoor').length > 1);
+  const hasShapes = p => shapeOptions(p.sq, zone.get(p.ref) === 'outdoor').length > 1;
+  const rows = nookParents(b).filter(p => zone.has(p.ref) && zone.get(p.ref) !== 'demi' && (hasShapes(p) || viaOptions(b, p.ref).length));
   if (!rows.length) return '';
   const fac = ref => b.basics.find(x => x.id === ref) || b.specials.find(x => x.id === ref);
   const groups = [['Rectangle', sh => isRectShape(sh)], ['L-shape', sh => sh[0] === 'L'], ['Split into separate rooms', sh => sh.includes('+')]];
   const sel = (p, out) => {
     const cur = validShape(fac(p.ref)?.shape, p.sq, out), opts = shapeOptions(p.sq, out);
     const o = sh => `<option value="${sh}" ${sh === cur ? 'selected' : ''}>${shapeLabel(sh)}</option>`;
+    if (!hasShapes(p)) return '';
     return `<select data-shape-ref="${p.ref}"><option value="">Any shape (random)</option>${groups.map(([g, t]) => { const l = opts.filter(t); return l.length ? `<optgroup label="${g}">${l.map(o).join('')}</optgroup>` : ''; }).join('')}</select>`;
   };
+  const viaSel = p => {
+    const opts = viaOptions(b, p.ref); if (!opts.length) return '';
+    const cur = mapRooms(b).find(r => r.ref === p.ref)?.via || '';
+    return `<select data-via-ref="${p.ref}" title="Where this room's door leads"><option value="">Door: to the hall</option>${opts.map(r => `<option value="${r.ref}" ${r.ref === cur ? 'selected' : ''}>Door: only through ${esc(mapLabel(b, r.ref, r.fb).full)}</option>`).join('')}</select>`;
+  };
   return `
-    <div class="section-head"><h2>Room Shapes</h2></div>
-    <p class="hint">Pick a shape for any facility you want to stay the same on the graph-paper map, however many times it's redrawn; "Any shape" gets a random rectangle each time. The area never changes: an L-shape or a split uses exactly the facility's squares. A split facility becomes several rooms side by side (numbered 5a, 5b…), each with its own door to the hall, and its closets go in the first one. Yard plots can only be rectangles.</p>
+    <div class="section-head"><h2>Room Shapes &amp; Doors</h2></div>
+    <p class="hint">Pick a shape for any facility you want to stay the same on the graph-paper map, however many times it's redrawn; "Any shape" gets a random rectangle each time. The area never changes: an L-shape or a split uses exactly the facility's squares. A split facility becomes several rooms (numbered 5a, 5b…), each with its own door to the hall, and its closets go in the first one. Yard plots can only be rectangles.<br>
+    <b>Door:</b> make a room an inner room, entered only through another one (a vault behind the study, a dressing room off the bedroom). It's drawn beside that room with a door between them and no door to the hall. A room can have up to 2 inner rooms, and an inner room can't have its own.</p>
     <div class="card nooks">
       ${rows.map(p => `
         <div class="nookrow"><span class="shape-name">${esc(p.name)} <span class="small muted">${p.space}, ${p.sq} sq</span></span>
-          ${sel(p, zone.get(p.ref) === 'outdoor')}</div>`).join('')}
+          ${sel(p, zone.get(p.ref) === 'outdoor')}${viaSel(p)}</div>`).join('')}
     </div>`;
 }
 function nookFits(b, ref, squares, except) {
@@ -1344,12 +1352,13 @@ function nookFits(b, ref, squares, except) {
 function lineMapCard(b) {
   const lm = b.lineMap;
   const floorsSel = `<select data-map-floors title="How many storeys"><option value="auto" ${lm?.floors !== 'single' ? 'selected' : ''}>Floors: automatic</option><option value="single" ${lm?.floors === 'single' ? 'selected' : ''}>Floors: single storey</option></select>`;
-  const hallSel = `<select data-map-hall title="Width of the central hall"><option value="10">Hall: 10 ft wide</option><option value="5" ${+b.hallWidth === 5 ? 'selected' : ''}>Hall: 5 ft wide</option></select>`
+  const facingSel = `<select data-map-facing title="Which way the front door faces. East or West turns the whole plan so the hall runs north-south.">${[['south', 'Front door: south'], ['north', 'Front door: north'], ['east', 'Front door: east (N–S hall)'], ['west', 'Front door: west (N–S hall)']].map(([v, l]) => `<option value="${v}" ${facingOf(b) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+  const hallSel = facingSel + `<select data-map-hall title="Width of the central hall"><option value="10">Hall: 10 ft wide</option><option value="5" ${+b.hallWidth === 5 ? 'selected' : ''}>Hall: 5 ft wide</option></select>`
     + `<select data-map-stairs title="Only matters once the Bastion has more than one floor. Straight: a 20-ft flight along the hall, landing at alternate ends floor by floor. Switchback: two short flights with a half-landing, on and off at the hall. Spiral: 10 ft across, on and off at the same point on every floor.">${[['straight', 'Stairs: straight'], ['switchback', 'Stairs: switchback'], ['spiral', 'Stairs: spiral']].map(([v, l]) => `<option value="${v}" ${stairStyle(b) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
   if (!lm) return `
     <div class="section-head"><h2>Graph-Paper Map</h2></div>
     <div class="card linemap-empty">
-      <p>Draw an old-school graph-paper floor plan of ${esc(b.name)} from its facilities. Every room opens onto the central hall, so nobody walks through the kitchen to get to bed. Public rooms sit by the entrance, the service wing on one side, and private rooms on the other. Big Bastions get an upper floor and a cellar.</p>
+      <p>Draw an old-school graph-paper floor plan of ${esc(b.name)} from its facilities. Every room opens onto the central hall, so nobody walks through the kitchen to get to bed, unless you make it an inner room under Room Shapes &amp; Doors. Public rooms sit by the entrance, the service wing on one side, and private rooms on the other. Big Bastions get an upper floor and a cellar.</p>
       <div class="row">${floorsSel}${hallSel}<button class="btn" data-act="genMap">Draw map</button></div>
     </div>
     ${aiBox(b)}`;
@@ -1402,7 +1411,7 @@ function aiBox(b) {
     <div class="row"><b>Ask the architect</b> <span class="badge">AI</span>
       ${plan ? '<span class="spacer"></span><button class="btn xs ghost" data-act="clearPlan" title="Forget the AI plan and go back to the automatic layout">Back to automatic layout</button>' : ''}</div>
     ${plan ? `<div class="aiplan"><div class="small muted">Last request: “${esc(lm.request || '')}”</div><p>${esc(plan.summary || '')}</p></div>` : ''}
-    <p class="small">${plan ? 'Ask for changes and the architect will revise this plan' : 'Describe the building and the architect will arrange your rooms'}, for example: “a three-storey wizard tower with my bedroom at the top”, “dug into a hillside, vault deepest”, “library next to my bedroom with a connecting door”, “put the smithy outside”. Every room keeps its own door onto the hall.</p>
+    <p class="small">${plan ? 'Ask for changes and the architect will revise this plan' : 'Describe the building and the architect will arrange your rooms'}, for example: “a three-storey wizard tower with my bedroom at the top”, “dug into a hillside, vault deepest”, “a north-south hall”, “the vault only reachable through my study”, “put the smithy outside”.</p>
     <textarea id="aiLayout" rows="3" maxlength="800" placeholder="How should ${esc(b.name)} be laid out?" ${busy ? 'disabled' : ''}>${esc(aiDraft[b.id] || '')}</textarea>
     <div class="row"><button class="btn" data-act="aiLayout" ${busy ? 'disabled' : ''}>${busy ? 'Planning… (up to a minute)' : plan ? 'Revise plan' : 'Plan it'}</button>
       <span class="small muted">Each Bastion gets 15 AI plans a day.</span></div>
@@ -1414,7 +1423,9 @@ async function askArchitect(b) {
   aiDraft[b.id] = text;
   if (!text) { toast('Describe the layout you want first.'); return; }
   const bid = b.id;
-  const rooms = mapRooms(b).map(r => { const lb = mapLabel(b, r.ref, r.fb); const nk = (b.nooks || []).filter(n => n.parent === r.ref).map(n => (n.label || n.kind).toLowerCase()); return { ref: r.ref, name: lb.full + (nk.length ? ` (has ${nk.join(', ')})` : ''), type: r.basic || DEF[r.key]?.name || r.fb, space: lb.space, zone: r.zone }; });
+  const rooms = mapRooms(b).map(r => { const lb = mapLabel(b, r.ref, r.fb); const nk = (b.nooks || []).filter(n => n.parent === r.ref).map(n => (n.label || n.kind).toLowerCase());
+    const via = r.via ? ` [inner room: entered only through ${mapLabel(b, r.via, '').full} (ref ${r.via})]` : '';
+    return { ref: r.ref, name: (lb.full + (nk.length ? ` (has ${nk.join(', ')})` : '') + via).slice(0, 160), type: r.basic || DEF[r.key]?.name || r.fb, space: lb.space, zone: r.zone }; });
   if (!rooms.length) { toast('This Bastion has no rooms yet.'); return; }
   const plan = b.lineMap?.plan;
   const walls = b.walls?.enclosed ? 'fully enclosed' : b.walls?.built ? `${b.walls.built} squares built` : '';
@@ -1424,12 +1435,13 @@ async function askArchitect(b) {
       method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB_KEY },
       body: JSON.stringify({ campaign: CAMPAIGN, bastionId: bid, request: text, rooms,
         current: plan ? { floors: plan.floors, outdoor: plan.outdoor, pairs: plan.pairs, secret: plan.secret, sides: plan.sides || [] } : null,
-        bastion: { name: b.name, walls } }),
+        bastion: { name: b.name, walls, facing: facingOf(b) } }),
     });
     const out = await r.json().catch(() => ({}));
     if (!r.ok || !out.plan) { toast(out.message || `The architect couldn't plan that (${r.status}).`); return; }
     const x = state.bastions.find(y => y.id === bid); if (!x) return;
     const seed = x.lineMap?.seed ?? newSeed();
+    if (out.plan.facing && FACING_ROT[out.plan.facing] != null) { if (out.plan.facing === 'south') delete x.facing; else x.facing = out.plan.facing; }
     x.lineMap = { seed, floors: 'auto', plan: out.plan, request: text, sig: mapSig(x), layout: generateMap(x, { seed, plan: out.plan }) };
     addLog(x, `Architect: ${text}`, 'build');
     aiDraft[bid] = '';
@@ -1634,6 +1646,16 @@ document.addEventListener('change', (e) => {
   if (el.dataset.shapeRef) {
     const x = b.basics.find(y => y.id === el.dataset.shapeRef) || b.specials.find(y => y.id === el.dataset.shapeRef); if (!x) return;
     if (el.value) x.shape = el.value; else delete x.shape;
+    if (b.lineMap) drawLineMap(b, b.lineMap.seed, b.lineMap.floors);
+    commit(); return;
+  }
+  if (el.dataset.mapFacing != null) { // only turns the drawing; the layout itself is unchanged
+    if (el.value === 'south') delete b.facing; else b.facing = el.value;
+    commit(); return;
+  }
+  if (el.dataset.viaRef) {
+    const x = b.basics.find(y => y.id === el.dataset.viaRef) || b.specials.find(y => y.id === el.dataset.viaRef); if (!x) return;
+    if (el.value) x.via = el.value; else delete x.via;
     if (b.lineMap) drawLineMap(b, b.lineMap.seed, b.lineMap.floors);
     commit(); return;
   }
