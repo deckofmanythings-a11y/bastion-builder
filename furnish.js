@@ -693,8 +693,8 @@ function renderFurnished(b, L, fi, opts = {}) {
     for (const n of fr?.nookItems || []) paintFloor(g, s, X(n.x), Y(n.y), n.w * s, n.h * s, n.wet ? 'wet' : 'wood', R);
   }
   // hall runner
-  const mainHall = f.hall[0];
-  if (mainHall && mainHall.w >= 4) {
+  const mainHall = f.hall[0], open = isOpenPlan(b);
+  if (mainHall && mainHall.w >= 4 && !open) {
     g.save(); g.globalAlpha = 0.9; drawItem(g, s, X, Y, { k: 'runner', x: mainHall.x + 0.6, y: mainHall.y + mainHall.h * 0.275, w: mainHall.w - 1.2, h: mainHall.h * 0.45, rot: 0 }, R); g.restore();
   }
   // stairs
@@ -716,19 +716,24 @@ function renderFurnished(b, L, fi, opts = {}) {
   }
   // walls
   const nooks = f.rooms.flatMap(r => placeNooks(b, r));
-  const wp = new Path2D(wallPath(f, X, Y, nooks));
   const thick = Math.max(4, s * 0.3);
-  g.lineCap = 'square'; g.lineJoin = 'miter';
-  shadowOn(g, s); g.strokeStyle = '#2a2522'; g.lineWidth = thick; g.stroke(wp); shadowOff(g);
-  g.strokeStyle = '#575049'; g.lineWidth = thick * 0.72; g.stroke(wp);
-  g.strokeStyle = '#6e665d'; g.lineWidth = Math.max(1, thick * 0.18); g.stroke(wp);
-  // doors
-  for (const d of f.doors) drawDoor(g, s, X, Y, d, thick);
-  for (const k of nooks) drawDoor(g, s, X, Y, { ...k.door, kind: 'door' }, thick * 0.8);
-  // entrance: steps and lanterns outside the front doors
+  if (open) { // wall-less: a faint marked edge between areas, no walls or doors
+    const ep = new Path2D(wallPath({ ...f, doors: [] }, X, Y, nooks.map(k => ({ ...k, door: { o: '-' } }))));
+    g.save(); g.setLineDash([s * 0.18, s * 0.18]); g.strokeStyle = 'rgba(30,24,18,.45)'; g.lineWidth = Math.max(1.5, s * 0.05); g.stroke(ep); g.restore();
+  } else {
+    const wp = new Path2D(wallPath(f, X, Y, nooks));
+    g.lineCap = 'square'; g.lineJoin = 'miter';
+    shadowOn(g, s); g.strokeStyle = '#2a2522'; g.lineWidth = thick; g.stroke(wp); shadowOff(g);
+    g.strokeStyle = '#575049'; g.lineWidth = thick * 0.72; g.stroke(wp);
+    g.strokeStyle = '#6e665d'; g.lineWidth = Math.max(1, thick * 0.18); g.stroke(wp);
+    // doors
+    for (const d of f.doors) drawDoor(g, s, X, Y, d, thick);
+    for (const k of nooks) drawDoor(g, s, X, Y, { ...k.door, kind: 'door' }, thick * 0.8);
+  }
+  // entrance: steps and lanterns outside the front doors (wall-less: just the lanterns)
   if (f.front) {
     const fy = Y(f.front.y);
-    for (let i = 0; i < 3; i++) { g.fillStyle = shade('#a8a298', -0.12 * i); g.fillRect(X(-1.25) - i * s * 0.08, fy + thick / 2 + i * s * 0.18, 2.5 * s + i * s * 0.16, s * 0.18); }
+    if (!open) for (let i = 0; i < 3; i++) { g.fillStyle = shade('#a8a298', -0.12 * i); g.fillRect(X(-1.25) - i * s * 0.08, fy + thick / 2 + i * s * 0.18, 2.5 * s + i * s * 0.16, s * 0.18); }
     for (const xx of [-1.7, 1.7]) { g.save(); g.translate(X(xx) - s * 0.25, fy + s * 0.15); DRAW.brazier(g, s * 0.5, s * 0.5, s); g.restore(); }
   }
   // Bastion wall
@@ -804,7 +809,7 @@ function drawLabels(g, b, L, fi, s, P, furn, f) {
     const fr = furn.get(rkey(r)), p = fr ? fr.label : { x: r.x + r.w / 2, y: r.y + r.h / 2 };
     numberBadge(g, ...P(p.x, p.y), roomNo(r), Math.max(11, s * 0.42));
   }
-  for (const d of f.doors) if (d.kind === 'secret') {
+  if (!isOpenPlan(b)) for (const d of f.doors) if (d.kind === 'secret') {
     const [cx, cy] = d.o === 'h' ? P(d.x + 0.5, d.y) : P(d.x, d.y + 0.5);
     g.font = `italic 700 ${Math.max(10, s * 0.4)}px Georgia, serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.lineWidth = 3; g.strokeStyle = '#000'; g.strokeText('S', cx, cy); g.fillStyle = '#ffd36a'; g.fillText('S', cx, cy);

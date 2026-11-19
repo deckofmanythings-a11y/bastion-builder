@@ -1353,7 +1353,8 @@ function lineMapCard(b) {
   const lm = b.lineMap;
   const floorsSel = `<select data-map-floors title="How many storeys"><option value="auto" ${lm?.floors !== 'single' ? 'selected' : ''}>Floors: automatic</option><option value="single" ${lm?.floors === 'single' ? 'selected' : ''}>Floors: single storey</option></select>`;
   const facingSel = `<select data-map-facing title="Which way the front door faces. East or West turns the whole plan so the hall runs north-south.">${[['south', 'Front door: south'], ['north', 'Front door: north'], ['east', 'Front door: east (N–S hall)'], ['west', 'Front door: west (N–S hall)']].map(([v, l]) => `<option value="${v}" ${facingOf(b) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
-  const hallSel = facingSel + `<select data-map-hall title="Width of the central hall"><option value="10">Hall: 10 ft wide</option><option value="5" ${+b.hallWidth === 5 ? 'selected' : ''}>Hall: 5 ft wide</option></select>`
+  const openSel = `<select data-map-open title="Wall-less: the Bastion is one big open area (a grove, a great cavern). Facilities keep their squares and shapes, marked out on the ground, with no walls or doors."><option value="">Walled building</option><option value="1" ${b.openPlan ? 'selected' : ''}>Wall-less (grove, cavern)</option></select>`;
+  const hallSel = openSel + facingSel + `<select data-map-hall title="Width of the central hall"><option value="10">Hall: 10 ft wide</option><option value="5" ${+b.hallWidth === 5 ? 'selected' : ''}>Hall: 5 ft wide</option></select>`
     + `<select data-map-stairs title="Only matters once the Bastion has more than one floor. Straight: a 20-ft flight along the hall, landing at alternate ends floor by floor. Switchback: two short flights with a half-landing, on and off at the hall. Spiral: 10 ft across, on and off at the same point on every floor.">${[['straight', 'Stairs: straight'], ['switchback', 'Stairs: switchback'], ['spiral', 'Stairs: spiral']].map(([v, l]) => `<option value="${v}" ${stairStyle(b) === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
   if (!lm) return `
     <div class="section-head"><h2>Graph-Paper Map</h2></div>
@@ -1647,6 +1648,10 @@ document.addEventListener('change', (e) => {
     const x = b.basics.find(y => y.id === el.dataset.shapeRef) || b.specials.find(y => y.id === el.dataset.shapeRef); if (!x) return;
     if (el.value) x.shape = el.value; else delete x.shape;
     if (b.lineMap) drawLineMap(b, b.lineMap.seed, b.lineMap.floors);
+    commit(); return;
+  }
+  if (el.dataset.mapOpen != null) { // only changes the drawing
+    if (el.value) b.openPlan = true; else delete b.openPlan;
     commit(); return;
   }
   if (el.dataset.mapFacing != null) { // only turns the drawing; the layout itself is unchanged

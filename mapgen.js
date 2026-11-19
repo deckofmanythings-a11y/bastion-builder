@@ -579,6 +579,9 @@ const MS = 16; // px per square
 // east-west; the drawing is then turned. East or west makes the hall run north-south. Text stays upright.
 const FACING_ROT = { south: 0, west: 90, north: 180, east: 270 };
 const facingOf = b => (FACING_ROT[b.facing] != null ? b.facing : 'south');
+// b.openPlan: a wall-less Bastion (a grove, a great cavern). Rooms keep their squares and shapes, but are drawn as
+// marked-out areas: no walls, no doors. Only the drawing changes; the layout is the same.
+const isOpenPlan = b => !!b.openPlan;
 let TXT_ROT = 0; // set while drawing a turned floor: room labels counter-rotate about their centres
 const INK = '#1f4f99', GRID = '#c3d4ec', GRID5 = '#9fbbe0', PAPER = '#eaf1fa';
 
@@ -685,11 +688,12 @@ function renderMapSVG(b, L) {
     for (const r of f.plots) out.push(`<rect x="${X(r.x)}" y="${Y(r.y)}" width="${r.w * MS}" height="${r.h * MS}" fill="none" stroke="${INK}" stroke-width="1.6" stroke-dasharray="6 3"/>`);
     // stairs treads
     if (f.stairs) out.push(stairSVG(f.stairs, X, Y, MS, 'body', INK));
-    // walls
-    const nooks = f.rooms.flatMap(r => placeNooks(b, r));
-    out.push(`<path d="${wallPath(f, X, Y, nooks)}" stroke="${INK}" stroke-width="3.2" stroke-linecap="square" fill="none"/>`);
+    // walls (or, wall-less, just the edges of each area)
+    const nooks = f.rooms.flatMap(r => placeNooks(b, r)), open = isOpenPlan(b);
+    if (open) out.push(`<path d="${wallPath({ ...f, doors: [] }, X, Y, nooks.map(k => ({ ...k, door: { o: '-' } })))}" stroke="${INK}" stroke-width="1.3" stroke-dasharray="3 3" fill="none" opacity=".75"/>`);
+    else out.push(`<path d="${wallPath(f, X, Y, nooks)}" stroke="${INK}" stroke-width="3.2" stroke-linecap="square" fill="none"/>`);
     // doors
-    for (const d of f.doors) {
+    if (!open) for (const d of f.doors) {
       const cx = d.o === 'h' ? X(d.x + 0.5) : X(d.x), cy = d.o === 'h' ? Y(d.y) : Y(d.y + 0.5);
       const w = d.o === 'h' ? MS * 0.62 : MS * 0.32, h = d.o === 'h' ? MS * 0.32 : MS * 0.62;
       if (d.kind === 'secret') {
@@ -701,7 +705,7 @@ function renderMapSVG(b, L) {
     }
     for (const k of nooks) {
       const d = k.door, cx = X(d.x + 0.5), cy = Y(d.y);
-      out.push(`<rect x="${cx - MS * 0.27}" y="${cy - MS * 0.14}" width="${MS * 0.54}" height="${MS * 0.28}" fill="#fff" stroke="${INK}" stroke-width="1.1"/>`);
+      if (!open) out.push(`<rect x="${cx - MS * 0.27}" y="${cy - MS * 0.14}" width="${MS * 0.54}" height="${MS * 0.28}" fill="#fff" stroke="${INK}" stroke-width="1.1"/>`);
       out.push(`<text x="${X(k.x + k.w / 2)}" y="${Y(k.y + k.h / 2) + 3}" font-size="8" text-anchor="middle" fill="${INK}">${e(NOOK_ABBR[k.n.kind] || (k.n.label || k.n.kind || '?').slice(0, 2))}</text>`);
     }
     if (f.stairs) out.push(stairSVG(f.stairs, X, Y, MS, 'labels', INK));
