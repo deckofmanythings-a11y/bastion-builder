@@ -653,7 +653,7 @@ function renderMapSVG(b, L) {
   out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" font-family="Georgia, 'Times New Roman', serif">`);
   out.push(`<rect width="${width}" height="${height}" fill="#fbfcfe"/>`);
   out.push(`<text x="${PAD}" y="34" font-size="24" font-weight="700" fill="${INK}">${e(b.name)}</text>`);
-  out.push(`<text x="${PAD}" y="54" font-size="13" fill="${INK}" opacity=".8">${e([b.character, b.campaign].filter(Boolean).join(' · '))}${b.character || b.campaign ? ' · ' : ''}1 square = 5 feet</text>`);
+  out.push(`<text x="${PAD}" y="54" font-size="13" fill="${INK}" opacity=".8">${e([b.character, b.campaign, b.location].filter(Boolean).join(' · '))}${b.character || b.campaign || b.location ? ' · ' : ''}1 square = 5 feet</text>`);
   noteLines.forEach((t, i) => out.push(`<text x="${PAD}" y="${74 + i * 17}" font-size="13" font-style="italic" fill="${INK}" opacity=".85">${e(t)}</text>`));
 
   for (const p of panels) {

@@ -728,6 +728,7 @@ function sideView(b) {
         <option value="" ${!b.campaign ? 'selected' : ''}>— Choose campaign —</option>
         ${[...CAMPAIGNS, ...(b.campaign && !CAMPAIGNS.includes(b.campaign) ? [b.campaign] : [])].map(c => `<option ${b.campaign === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}
       </select></label>
+      <label class="field"><span>Location</span><input data-bind="location" maxlength="120" value="${esc(b.location || '')}" placeholder="Where is it? e.g. a cliffside above Neverwinter"></label>
       <label class="field"><span>Character level</span><input type="number" min="1" max="20" data-bind="level" data-num value="${b.level}"></label>
       ${b.level < 5 ? '<p class="warn">Bastions are normally gained at level 5.</p>' : ''}
       ${(() => {
@@ -1436,7 +1437,7 @@ async function askArchitect(b) {
       method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB_KEY },
       body: JSON.stringify({ campaign: CAMPAIGN, bastionId: bid, request: text, rooms,
         current: plan ? { floors: plan.floors, outdoor: plan.outdoor, pairs: plan.pairs, secret: plan.secret, sides: plan.sides || [] } : null,
-        bastion: { name: b.name, walls: [walls, b.openPlan ? 'WALL-LESS open site (grove/cavern): one floor only, level 0' : ''].filter(Boolean).join('; '), facing: facingOf(b) } }),
+        bastion: { name: b.name, location: (b.location || '').slice(0, 120), walls: [walls, b.openPlan ? 'WALL-LESS open site (grove/cavern): one floor only, level 0' : ''].filter(Boolean).join('; '), facing: facingOf(b) } }),
     });
     const out = await r.json().catch(() => ({}));
     if (!r.ok || !out.plan) { toast(out.message || `The architect couldn't plan that (${r.status}).`); return; }

@@ -138,7 +138,7 @@ const SCHEMA = {
 };
 
 type Room = { ref: string; name: string; type: string; space: string; zone: string };
-type Ask = { campaign: string; bastionId: string; request: string; rooms: Room[]; current: unknown; bastion: { name?: string; walls?: string; facing?: string } };
+type Ask = { campaign: string; bastionId: string; request: string; rooms: Room[]; current: unknown; bastion: { name?: string; location?: string; walls?: string; facing?: string } };
 
 function validate(x: any): Ask | string {
   if (!x || typeof x !== "object") return "body must be a JSON object";
@@ -155,7 +155,7 @@ function validate(x: any): Ask | string {
   }
   const cur = x.current && JSON.stringify(x.current).length < 8000 ? x.current : null;
   return { campaign: x.campaign, bastionId: x.bastionId, request: x.request.trim(), rooms, current: cur,
-    bastion: { name: String(x.bastion?.name ?? "").slice(0, 80), walls: String(x.bastion?.walls ?? "").slice(0, 160),
+    bastion: { name: String(x.bastion?.name ?? "").slice(0, 80), location: String(x.bastion?.location ?? "").slice(0, 120), walls: String(x.bastion?.walls ?? "").slice(0, 160),
       facing: FACINGS.includes(x.bastion?.facing) ? x.bastion.facing : "south" } };
 }
 
@@ -234,7 +234,7 @@ Deno.serve(async (req) => {
   };
 
   const userMsg = [
-    `Bastion: ${ask.bastion.name || "(unnamed)"}${ask.bastion.walls ? ` — walls: ${ask.bastion.walls}` : ""} — front door currently faces ${ask.bastion.facing}`,
+    `Bastion: ${ask.bastion.name || "(unnamed)"}${ask.bastion.location ? ` — located: ${ask.bastion.location}` : ""}${ask.bastion.walls ? ` — walls: ${ask.bastion.walls}` : ""} — front door currently faces ${ask.bastion.facing}`,
     `Rooms (ref, name, kind, size, usual zone):`,
     ...ask.rooms.map((r) => `- ${r.ref} | ${r.name} | ${r.type} | ${r.space} | ${r.zone}`),
     ask.current ? `\nCurrent plan (revise it according to the request; keep what the request doesn't change):\n${JSON.stringify(ask.current)}` : "",
