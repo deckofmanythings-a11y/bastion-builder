@@ -129,7 +129,8 @@ const bpFileName = (b, p, ext) => mapFileName(b, ext).replace(/ map\.(\w+)$/, ` 
 function blueprintCard(b, p) {
   const main = b.mainMap === 'bp:' + p.id, src = (b.maps || []).find(m => m.id === p.mapId);
   return `<div class="section-head"><h2>${esc(p.name || 'Blueprint')} <small>blueprint${src ? ` of ${esc(src.caption || src.name)}` : ''}</small></h2>
-      <div class="row"><button class="btn sm" data-act="bpEdit" data-bp="${esc(p.id)}">Edit</button>
+      <div class="row"><button class="btn sm ${p.locked ? '' : 'ghost'}" data-act="bpLock" data-bp="${esc(p.id)}" title="${p.locked ? 'Locked: saving changes over it or deleting it needs the character&#39;s name. Click to unlock.' : 'Lock this blueprint so nobody overwrites or deletes it without typing the character&#39;s name'}">${p.locked ? '🔒 Locked' : '🔓 Lock'}</button>
+      <button class="btn sm" data-act="bpEdit" data-bp="${esc(p.id)}">Edit</button>
       <button class="btn sm ghost" data-act="bpSvg" data-bp="${esc(p.id)}">SVG</button><button class="btn sm ghost" data-act="bpPng" data-bp="${esc(p.id)}">PNG</button>
       ${main ? '<button class="btn sm ghost" data-main-map="" title="Unpin from the top of the page">★ Main map</button>' : `<button class="btn sm ghost" data-main-map="bp:${esc(p.id)}" title="Show this blueprint at the top of the Maps tab, for everyone">Make main map</button>`}
       <button class="btn sm ghost danger" data-act="bpDel" data-bp="${esc(p.id)}">Delete</button></div></div>
@@ -142,7 +143,12 @@ function blueprintsView(b, skip) {
 }
 function deleteBlueprint(b, id) {
   const p = (b.blueprints || []).find(x => x.id === id); if (!p) return;
+  if (p.locked) { nameGate(b, `Delete the locked blueprint "${p.name}"`, () => bpRemove(B(), id)); return; }
   if (!confirm(`Delete the blueprint "${p.name}"? The uploaded map it was traced from stays.`)) return;
+  bpRemove(b, id);
+}
+function bpRemove(b, id) {
+  const p = (b?.blueprints || []).find(x => x.id === id); if (!p) return;
   b.blueprints = b.blueprints.filter(x => x !== p);
   if (!b.blueprints.length) delete b.blueprints;
   if (b.mainMap === 'bp:' + id) delete b.mainMap;
@@ -538,14 +544,16 @@ function trInput(e) {
     r.name = el.value.slice(0, 40); trDraw();
   }
 }
-function trSave() {
+function trSave(ok) {
   const b = state.bastions.find(x => x.id === T.bid); // re-find: a live update may have replaced the object
   if (!b) { trSay('This Bastion is no longer here, so the blueprint could not be saved.'); return; }
+  const old = (b.blueprints || []).find(p => p.id === T.bpId);
+  if (old?.locked && !ok) { nameGate(b, `Save over the locked blueprint "${old.name}"`, () => T && trSave(true)); return; }
   trPruneDoors();
   const s = trSerialise(); s.rooms = s.rooms.filter(r => r.r.length);
   if (!s.rooms.length) { trSay('Paint at least one room first.'); return; }
   const list = (b.blueprints ||= []), at = list.findIndex(p => p.id === T.bpId);
-  const bp = { id: T.bpId || uid(), mapId: T.mapId, name: ($('#trName').value.trim() || 'Blueprint').slice(0, 60), ...s, updatedAt: new Date().toISOString() };
+  const bp = { id: T.bpId || uid(), mapId: T.mapId, name: ($('#trName').value.trim() || 'Blueprint').slice(0, 60), ...s, ...(old?.locked ? { locked: true } : {}), updatedAt: new Date().toISOString() };
   if (at >= 0) list[at] = bp; else list.push(bp);
   addLog(b, `Blueprint ${at >= 0 ? 'updated' : 'traced'}: ${bp.name}.`, 'build');
   dirty.add(b.id); writeCache(); schedulePush();

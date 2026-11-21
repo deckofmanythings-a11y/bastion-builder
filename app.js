@@ -1231,6 +1231,24 @@ function askDeleteMap(b, mapId) {
     <div class="row"><button class="btn ghost danger" id="mapDelGo" data-act="mapDelGo" data-map="${esc(m.id)}" disabled>Delete map</button></div>`);
   setTimeout(() => $('#mapDelName')?.focus(), 0);
 }
+// Locks: a locked graph-paper map (b.lineMap.locked) or traced blueprint (bp.locked) can still be redrawn, overwritten,
+// deleted or unlocked, but only after typing the character's name exactly, the same check as deleting an uploaded map.
+const mapLocked = b => !!b.lineMap?.locked;
+let gateFn = null;
+function nameGate(b, what, fn) {
+  const who = delName(b);
+  if (!who) { if (confirm(`This is locked. ${what}?`)) fn(); return; }
+  gateFn = fn;
+  showModal(`<div class="mhead"><h2>🔒 Locked</h2><button class="btn ghost sm" data-close>Cancel</button></div>
+    <p>${esc(what)}?</p>
+    <p>To confirm, type the character's name exactly as shown (capitals count): <b class="exact-name">${esc(who)}</b></p>
+    <input id="gateName" class="wide" autocomplete="off" spellcheck="false" aria-label="Character name">
+    <div class="row"><button class="btn" id="gateGo" data-act="gateGo" disabled>Confirm</button></div>`);
+  setTimeout(() => $('#gateName')?.focus(), 0);
+}
+// run fn now if unlocked, or after the name check if locked
+const ifUnlocked = (b, locked, what, fn) => locked ? nameGate(b, what, fn) : fn();
+
 async function deleteMap(bid, mapId, typed) {
   let b = state.bastions.find(x => x.id === bid); if (!b) return;
   const m = (b.maps || []).find(x => x.id === mapId); if (!m) return;
@@ -1380,14 +1398,15 @@ function lineMapCard(b) {
       <div class="row">${floorsSel}${hallSel}<button class="btn" data-act="genMap">Draw map</button></div>
     </div>
     ${aiBox(b)}`;
-  const stale = lm.sig !== mapSig(b);
+  const stale = lm.sig !== mapSig(b), lk = !!lm.locked;
+  const lockBtn = `<button class="btn sm ${lk ? '' : 'ghost'}" data-act="lockMap" title="${lk ? 'Locked: redrawing, a new layout, the architect or changing these settings needs the character&#39;s name. Click to unlock.' : 'Lock this map so nobody redraws or replaces it without typing the character&#39;s name'}">${lk ? '🔒 Locked' : '🔓 Lock'}</button>`;
   const problems = checkMap(lm.layout);
   return `
     <div class="section-head"><h2>Graph-Paper Map</h2>
-      <div class="row">${lm.plan ? '' : floorsSel}${hallSel}<button class="btn sm ghost" data-act="rerollMap" title="Shuffle room sizes and sides, keeping the same plan">New layout</button>
+      <div class="row">${lk ? '' : (lm.plan ? '' : floorsSel) + hallSel}${lockBtn}<button class="btn sm ghost" data-act="rerollMap" title="Shuffle room sizes and sides, keeping the same plan">New layout</button>
       <button class="btn sm ghost" data-act="dlMapSvg">SVG</button><button class="btn sm ghost" data-act="dlMapPng">PNG</button>
       <button class="btn sm" data-act="saveMapPng" title="Add a PNG of this map to the uploaded maps">Save to Maps</button></div></div>
-    ${stale ? `<div class="warnbar">This Bastion's facilities have changed since the map was drawn. <button class="btn xs" data-act="updateMap">Redraw map</button></div>` : ''}
+    ${stale ? `<div class="warnbar">This Bastion's facilities have changed since the map was drawn.${lk ? ' The map is locked, so it stays as it is until someone redraws it.' : ''} <button class="btn xs" data-act="updateMap">${lk ? '🔒 ' : ''}Redraw map</button></div>` : ''}
     ${problems.length ? `<div class="warnbar">Layout check: ${problems.map(esc).join('; ')}</div>` : ''}
     <div class="linemap">${renderMapSVG(b, lm.layout)}</div>
     <p class="small muted">Layout #${lm.seed.toString(36)}. Rooms still being built aren't shown until they're finished. "New layout" shuffles the arrangement; the map stays the same until someone redraws it.</p>
@@ -1460,7 +1479,7 @@ async function askArchitect(b) {
     const x = state.bastions.find(y => y.id === bid); if (!x) return;
     const seed = x.lineMap?.seed ?? newSeed();
     if (out.plan.facing && FACING_ROT[out.plan.facing] != null) { if (out.plan.facing === 'south') delete x.facing; else x.facing = out.plan.facing; }
-    x.lineMap = { seed, floors: 'auto', plan: out.plan, request: text, sig: mapSig(x), layout: generateMap(x, { seed, plan: out.plan }) };
+    x.lineMap = { seed, floors: 'auto', plan: out.plan, request: text, sig: mapSig(x), layout: generateMap(x, { seed, plan: out.plan }), ...(mapLocked(x) ? { locked: true } : {}) };
     addLog(x, `Architect: ${text}`, 'build');
     aiDraft[bid] = '';
     dirty.add(bid); writeCache(); schedulePush();
@@ -1470,9 +1489,10 @@ async function askArchitect(b) {
     aiBusy = null; render();
   }
 }
-function drawLineMap(b, seed, floors) {
+function drawLineMap(b, seed, floors, force) {
+  if (mapLocked(b) && !force) return; // locked: facility changes just mark the map out of date
   const plan = b.lineMap?.plan || null, request = b.lineMap?.request;
-  b.lineMap = { seed, floors, sig: mapSig(b), layout: generateMap(b, { seed, floors, plan }), ...(plan ? { plan, request } : {}) };
+  b.lineMap = { seed, floors, sig: mapSig(b), layout: generateMap(b, { seed, floors, plan }), ...(plan ? { plan, request } : {}), ...(mapLocked(b) ? { locked: true } : {}) };
 }
 const newSeed = () => Math.floor(Math.random() * 2 ** 31);
 function mapFileName(b, ext) { return `${(b.name || 'bastion').replace(/[^\w\- ]+/g, '').trim() || 'bastion'} map.${ext}`; }
@@ -1519,6 +1539,10 @@ document.addEventListener('click', (e) => {
   const b = B();
   if (el.dataset.mapDel) { askDeleteMap(b, el.dataset.mapDel); return; }
   if (el.dataset.mainMap != null) { if (el.dataset.mainMap) b.mainMap = el.dataset.mainMap; else delete b.mainMap; commit(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+  if (el.dataset.act === 'gateGo') {
+    if (($('#gateName')?.value || '').trim() !== delName(b)) { toast("The name doesn't match."); return; }
+    const f = gateFn; gateFn = null; closeModal(); f?.(); return;
+  }
   if (el.dataset.act === 'mapDelGo') { deleteMap(b.id, el.dataset.map, $('#mapDelName')?.value || ''); return; }
   if (el.dataset.tab) { tab = el.dataset.tab; render(); return; }
   if (el.dataset.nookDel) { b.nooks = (b.nooks || []).filter(n => n.id !== el.dataset.nookDel); commit(); return; }
@@ -1557,13 +1581,25 @@ document.addEventListener('click', (e) => {
       else svgToPngBlob(renderBlueprintSVG(b, p)).then(bl => downloadBlob(bl, bpFileName(b, p, 'png'))).catch(err => toast(err.message));
       return;
     }
-    case 'aiLayout': askArchitect(b); return;
+    case 'aiLayout': ifUnlocked(b, mapLocked(b), 'Let the architect replace the locked map', () => askArchitect(B())); return;
     case 'clearPlan':
-      if (confirm('Forget the architect\'s plan and go back to the automatic layout?')) { delete b.lineMap.plan; delete b.lineMap.request; drawLineMap(b, b.lineMap.seed, b.lineMap.floors); commit(); }
+      ifUnlocked(b, mapLocked(b), 'Forget the architect\'s plan and redraw the locked map', () => {
+        if (!mapLocked(b) && !confirm('Forget the architect\'s plan and go back to the automatic layout?')) return;
+        delete b.lineMap.plan; delete b.lineMap.request; drawLineMap(b, b.lineMap.seed, b.lineMap.floors, true); commit(); });
       return;
     case 'genMap': drawLineMap(b, newSeed(), $('[data-map-floors]')?.value || 'auto'); addLog(b, 'Graph-paper map drawn.', 'build'); commit(); return;
-    case 'rerollMap': drawLineMap(b, newSeed(), b.lineMap.floors); commit(); return;
-    case 'updateMap': drawLineMap(b, b.lineMap.seed, b.lineMap.floors); commit(); return;
+    case 'rerollMap': ifUnlocked(b, mapLocked(b), 'Replace the locked map with a new layout', () => { drawLineMap(b, newSeed(), b.lineMap.floors, true); commit(); }); return;
+    case 'updateMap': ifUnlocked(b, mapLocked(b), 'Redraw the locked map', () => { drawLineMap(b, b.lineMap.seed, b.lineMap.floors, true); commit(); }); return;
+    case 'lockMap':
+      if (mapLocked(b)) nameGate(b, 'Unlock the graph-paper map', () => { delete b.lineMap.locked; addLog(b, 'Graph-paper map unlocked.', 'build'); commit(); });
+      else { b.lineMap.locked = true; addLog(b, 'Graph-paper map locked.', 'build'); commit(); }
+      return;
+    case 'bpLock': {
+      const p = (b.blueprints || []).find(x => x.id === el.dataset.bp); if (!p) return;
+      if (p.locked) nameGate(b, `Unlock the blueprint "${p.name}"`, () => { const q = (B().blueprints || []).find(x => x.id === p.id); if (q) { delete q.locked; addLog(B(), `Blueprint unlocked: ${q.name}.`, 'build'); commit(); } });
+      else { p.locked = true; addLog(b, `Blueprint locked: ${p.name}.`, 'build'); commit(); }
+      return;
+    }
     case 'dlMapSvg': downloadBlob(new Blob([renderMapSVG(b, b.lineMap.layout)], { type: 'image/svg+xml' }), mapFileName(b, 'svg')); return;
     case 'dlFurn': case 'saveFurn': {
       const fi = Math.min(furnUi.floor, b.lineMap.layout.fl.length - 1), name = mapFileName(b, 'png').replace(/\.png$/, `-${b.lineMap.layout.fl[fi].name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}${furnUi.labels ? '' : '-unlabelled'}-battlemap.png`);
@@ -1646,11 +1682,12 @@ document.addEventListener('click', (e) => {
 
 // map delete confirm: the button only unlocks once the name matches exactly
 document.addEventListener('input', (e) => {
-  if (e.target.id !== 'mapDelName') return;
-  const go = $('#mapDelGo'), b = B(); if (go && b) go.disabled = e.target.value.trim() !== delName(b);
+  const pair = { mapDelName: '#mapDelGo', gateName: '#gateGo' }[e.target.id]; if (!pair) return;
+  const go = $(pair), b = B(); if (go && b) go.disabled = e.target.value.trim() !== delName(b);
 });
 document.addEventListener('keydown', (e) => {
   if (e.target.id === 'mapDelName' && e.key === 'Enter' && !$('#mapDelGo')?.disabled) { e.preventDefault(); $('#mapDelGo').click(); }
+  if (e.target.id === 'gateName' && e.key === 'Enter' && !$('#gateGo')?.disabled) { e.preventDefault(); $('#gateGo').click(); }
 });
 
 document.addEventListener('change', (e) => {
@@ -1677,6 +1714,7 @@ document.addEventListener('change', (e) => {
     if (b.lineMap) drawLineMap(b, b.lineMap.seed, b.lineMap.floors);
     commit(); return;
   }
+  if (mapLocked(b) && ['mapOpen', 'mapFacing', 'mapHall', 'mapStairs', 'mapFloors'].some(k => el.dataset[k] != null)) { toast('The map is locked. Unlock it to change its settings.'); render(); return; }
   if (el.dataset.mapOpen != null) { // wall-less is single storey, so the layout is redrawn
     if (el.value) b.openPlan = true; else delete b.openPlan;
     if (b.lineMap) drawLineMap(b, b.lineMap.seed, b.openPlan ? 'single' : 'auto');
