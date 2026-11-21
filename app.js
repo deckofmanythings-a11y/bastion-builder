@@ -1176,20 +1176,33 @@ const mapUrl = (m, download) => sb.storage.from(MAP_BUCKET).getPublicUrl(m.path,
 const fmtBytes = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 
 function mapsView(b) {
-  const maps = b.maps || [];
+  const maps = b.maps || [], main = maps.find(m => m.id === b.mainMap);
+  const mainBp = main ? null : (b.blueprints || []).find(p => 'bp:' + p.id === b.mainMap); // b.mainMap = 'bp:<id>' pins a traced blueprint
   return `
+    ${main ? mainMapCard(main) : mainBp ? blueprintCard(b, mainBp) : ''}
     ${lineMapCard(b)}
     <div class="section-head"><h2>Uploaded Maps</h2></div>
-    <p class="hint">Upload your own maps of ${esc(b.name)} — floor plans, sketches, VTT battle maps. Everyone in the party (and the DM) can view and download them. PNG, JPG, WebP, GIF or PDF, up to 10 MB each.</p>
+    <p class="hint">Upload your own maps of ${esc(b.name)} — floor plans, sketches, VTT battle maps. Everyone in the party (and the DM) can view and download them. PNG, JPG, WebP, GIF or PDF, up to 10 MB each. "Trace blueprint" on an image turns it into a clean graph-paper plan with rooms and doors.</p>
     <div class="card map-upload">
       <label class="btn">${uploading ? 'Uploading…' : '+ Upload maps'}<input id="mapUpload" type="file" multiple accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,image/png,image/jpeg,image/webp,image/gif,application/pdf" hidden ${uploading ? 'disabled' : ''}></label>
       <span class="small">To delete a map you'll be asked to type ${esc(delName(b) ? `the character's name (${delName(b)})` : 'the name')} exactly.</span>
     </div>
-    ${maps.length ? `<div class="maps">${maps.slice().reverse().map(m => mapCard(m)).join('')}</div>`
-      : '<div class="placeholder">No maps uploaded yet.</div>'}`;
+    ${maps.length ? `<div class="maps">${maps.slice().reverse().map(m => mapCard(m, b)).join('')}</div>`
+      : '<div class="placeholder">No maps uploaded yet.</div>'}
+    ${blueprintsView(b, mainBp)}`;
 }
 
-function mapCard(m) {
+// an uploaded map picked as the Bastion's main map: shown large at the top of the Maps tab, above the graph-paper map
+function mainMapCard(m) {
+  const url = mapUrl(m), isPdf = m.type === 'application/pdf';
+  return `<div class="section-head"><h2>${esc(m.caption || m.name)}</h2>
+      <div class="row"><a class="btn sm ghost" href="${esc(url)}" target="_blank" rel="noopener">Open full size</a><a class="btn sm ghost" href="${esc(mapUrl(m, true))}">Download</a>
+      <button class="btn sm ghost" data-main-map="" title="Go back to the graph-paper map as the main map">Unpin</button></div></div>
+    <div class="card mainmap">${isPdf ? `<object data="${esc(url)}" type="application/pdf"><a href="${esc(url)}" target="_blank" rel="noopener">Open the PDF</a></object>`
+      : `<a href="${esc(url)}" target="_blank" rel="noopener" title="Open full size"><img src="${esc(url)}" alt="${esc(m.caption || m.name)}"></a>`}</div>`;
+}
+
+function mapCard(m, b) {
   const isPdf = m.type === 'application/pdf';
   const url = mapUrl(m);
   return `<div class="card mapcard" data-map="${m.id}">
@@ -1199,6 +1212,8 @@ function mapCard(m) {
     <input class="mapcap" data-map-caption="${m.id}" value="${esc(m.caption)}" placeholder="Caption (e.g. Ground floor)">
     <div class="small muted">${esc(m.name)} · ${fmtBytes(m.size)} · ${new Date(m.uploadedAt).toLocaleDateString()}</div>
     <div class="row"><a class="btn xs ghost" href="${esc(url)}" target="_blank" rel="noopener">Open</a><a class="btn xs" href="${esc(mapUrl(m, true))}">Download</a>
+      ${b.mainMap === m.id ? '<button class="btn xs" data-main-map="" title="Unpin from the top of the page">★ Main map</button>' : `<button class="btn xs ghost" data-main-map="${m.id}" title="Show this map large at the top of the Maps tab, for everyone">Make main map</button>`}
+      ${isPdf ? '' : `<button class="btn xs ghost" data-act="traceMap" data-map="${m.id}" title="Draw rooms, walls and doors over this map to make a clean graph-paper blueprint">Trace blueprint</button>`}
       <button class="btn xs ghost danger" data-map-del="${m.id}" title="Delete this map">Delete</button></div>
   </div>`;
 }
@@ -1222,6 +1237,7 @@ async function deleteMap(bid, mapId, typed) {
   if (typed.trim() !== delName(b)) { toast("The name doesn't match."); return; }
   closeModal();
   b.maps = b.maps.filter(x => x.id !== mapId);
+  if (b.mainMap === mapId) delete b.mainMap;
   addLog(b, `Map deleted: ${m.name}.`, 'build');
   writeCache(); render();
   // save now (not on the usual debounce) so the server sees the map is gone before the file is removed
@@ -1498,10 +1514,11 @@ function toast(msg) {
 
 // ---------- events wiring ----------
 document.addEventListener('click', (e) => {
-  const el = e.target.closest('[data-act],[data-tab],[data-mode],[data-pick],[data-close],[data-ev-act],[data-pick-event],[data-creature-del],[data-open-bastion],[data-nook-del],[data-map-del]');
+  const el = e.target.closest('[data-act],[data-tab],[data-mode],[data-pick],[data-close],[data-ev-act],[data-pick-event],[data-creature-del],[data-open-bastion],[data-nook-del],[data-map-del],[data-main-map]');
   if (!el) return;
   const b = B();
   if (el.dataset.mapDel) { askDeleteMap(b, el.dataset.mapDel); return; }
+  if (el.dataset.mainMap != null) { if (el.dataset.mainMap) b.mainMap = el.dataset.mainMap; else delete b.mainMap; commit(); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
   if (el.dataset.act === 'mapDelGo') { deleteMap(b.id, el.dataset.map, $('#mapDelName')?.value || ''); return; }
   if (el.dataset.tab) { tab = el.dataset.tab; render(); return; }
   if (el.dataset.nookDel) { b.nooks = (b.nooks || []).filter(n => n.id !== el.dataset.nookDel); commit(); return; }
@@ -1530,6 +1547,15 @@ document.addEventListener('click', (e) => {
       const why = nookFits(b, parent, sq); if (why) { toast(why); return; }
       (b.nooks ||= []).push({ id: uid(), kind: $('#nookKind').value, label: '', squares: sq, parent });
       commit(); return;
+    }
+    case 'traceMap': traceOpen({ mapId: el.dataset.map }); return;
+    case 'bpEdit': traceOpen({ bpId: el.dataset.bp }); return;
+    case 'bpDel': deleteBlueprint(b, el.dataset.bp); return;
+    case 'bpSvg': case 'bpPng': {
+      const p = (b.blueprints || []).find(x => x.id === el.dataset.bp); if (!p) return;
+      if (el.dataset.act === 'bpSvg') downloadBlob(new Blob([renderBlueprintSVG(b, p)], { type: 'image/svg+xml' }), bpFileName(b, p, 'svg'));
+      else svgToPngBlob(renderBlueprintSVG(b, p)).then(bl => downloadBlob(bl, bpFileName(b, p, 'png'))).catch(err => toast(err.message));
+      return;
     }
     case 'aiLayout': askArchitect(b); return;
     case 'clearPlan':
